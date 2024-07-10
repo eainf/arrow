@@ -840,12 +840,12 @@ if(ARROW_BUILD_EXAMPLES)
   add_custom_target(runexample ctest -L example)
   add_subdirectory(examples/arrow)
 endif()
-
+#[[
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE.txt
               ${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.txt
               ${CMAKE_CURRENT_SOURCE_DIR}/README.md
         DESTINATION "${ARROW_DOC_DIR}")
-
+]]
 config_summary_message()
 if(${ARROW_BUILD_CONFIG_SUMMARY_JSON})
   config_summary_json()
