@@ -93,7 +93,7 @@ if(ARROW_DEPENDENCY_SOURCE STREQUAL "VCPKG")
 endif()
 
 project(arrow VERSION "${ARROW_BASE_VERSION}")
-
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(ARROW_VERSION_MAJOR "${arrow_VERSION_MAJOR}")
 set(ARROW_VERSION_MINOR "${arrow_VERSION_MINOR}")
 set(ARROW_VERSION_PATCH "${arrow_VERSION_PATCH}")
@@ -742,11 +742,11 @@ if(ARROW_BUILD_EXAMPLES)
   add_subdirectory(examples/arrow)
 endif()
 
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE.txt
-              ${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.txt
-              ${CMAKE_CURRENT_SOURCE_DIR}/README.md DESTINATION "${ARROW_DOC_DIR}")
+#install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE.txt
+#              ${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.txt
+#              ${CMAKE_CURRENT_SOURCE_DIR}/README.md DESTINATION "${ARROW_DOC_DIR}")
 
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gdb_arrow.py DESTINATION "${ARROW_GDB_DIR}")
+#install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gdb_arrow.py DESTINATION "${ARROW_GDB_DIR}")
 
 #
 # Validate and print out Arrow configuration options
