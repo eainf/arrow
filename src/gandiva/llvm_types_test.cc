@@ -53,8 +53,7 @@ TEST_F(TestLLVMTypes, TestFound) {
 }
 
 TEST_F(TestLLVMTypes, TestNotFound) {
-  EXPECT_EQ(types_->IRType(arrow::Type::SPARSE_UNION), nullptr);
-  EXPECT_EQ(types_->IRType(arrow::Type::DENSE_UNION), nullptr);
+  EXPECT_EQ(types_->IRType(arrow::Type::type::UNION), nullptr);
   EXPECT_EQ(types_->DataVecType(arrow::null()), nullptr);
 }
 

@@ -18,22 +18,26 @@
 
 #pragma once
 
-#include <cstddef>
 #include <new>
 #include <string>
 #include <type_traits>
 #include <utility>
 
 #include "arrow/status.h"
-#include "arrow/util/aligned_storage.h"
 #include "arrow/util/compare.h"
 
 namespace arrow {
 
-template <typename>
-struct EnsureResult;
-
 namespace internal {
+
+#if __cplusplus >= 201703L
+using std::launder;
+#else
+template <class T>
+constexpr T* launder(T* p) noexcept {
+  return p;
+}
+#endif
 
 ARROW_EXPORT void DieWithMessage(const std::string& msg);
 
@@ -94,7 +98,7 @@ ARROW_EXPORT void InvalidValueOrDie(const Status& st);
 ///   arrow::Result<int> CalculateFoo();
 /// ```
 template <class T>
-class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
+class ARROW_MUST_USE_TYPE Result : public util::EqualityComparable<Result<T>> {
   template <typename U>
   friend class Result;
 
@@ -111,7 +115,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// `Result<std::vector<int>>`. While `return {}` seems like it would return
   /// an empty vector, it will actually invoke the default constructor of
   /// Result.
-  explicit Result() noexcept  // NOLINT(runtime/explicit)
+  explicit Result()  // NOLINT(runtime/explicit)
       : status_(Status::UnknownError("Uninitialized Result<T>")) {}
 
   ~Result() noexcept { Destroy(); }
@@ -126,7 +130,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// convenience.
   ///
   /// \param status The non-OK Status object to initialize to.
-  Result(const Status& status) noexcept  // NOLINT(runtime/explicit)
+  Result(const Status& status)  // NOLINT(runtime/explicit)
       : status_(status) {
     if (ARROW_PREDICT_FALSE(status.ok())) {
       internal::DieWithMessage(std::string("Constructed with a non-error status: ") +
@@ -188,7 +192,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// object results in a compilation error.
   ///
   /// \param other The value to copy from.
-  Result(const Result& other) noexcept : status_(other.status_) {
+  Result(const Result& other) : status_(other.status_) {
     if (ARROW_PREDICT_TRUE(status_.ok())) {
       ConstructValue(other.ValueUnsafe());
     }
@@ -203,7 +207,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   template <typename U, typename E = typename std::enable_if<
                             std::is_constructible<T, const U&>::value &&
                             std::is_convertible<U, T>::value>::type>
-  Result(const Result<U>& other) noexcept : status_(other.status_) {
+  Result(const Result<U>& other) : status_(other.status_) {
     if (ARROW_PREDICT_TRUE(status_.ok())) {
       ConstructValue(other.ValueUnsafe());
     }
@@ -212,9 +216,9 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// Copy-assignment operator.
   ///
   /// \param other The Result object to copy.
-  Result& operator=(const Result& other) noexcept {
+  Result& operator=(const Result& other) {
     // Check for self-assignment.
-    if (ARROW_PREDICT_FALSE(this == &other)) {
+    if (this == &other) {
       return *this;
     }
     Destroy();
@@ -255,7 +259,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// status.
   Result& operator=(Result&& other) noexcept {
     // Check for self-assignment.
-    if (ARROW_PREDICT_FALSE(this == &other)) {
+    if (this == &other) {
       return *this;
     }
     Destroy();
@@ -285,7 +289,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// \return True if this Result object's status is OK (i.e. a call to ok()
   /// returns true). If this function returns true, then it is safe to access
   /// the wrapped element through a call to ValueOrDie().
-  constexpr bool ok() const { return status_.ok(); }
+  bool ok() const { return status_.ok(); }
 
   /// \brief Equivalent to ok().
   // operator bool() const { return ok(); }
@@ -294,7 +298,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   ///
   /// \return The stored non-OK status object, or an OK status if this object
   ///         has a value.
-  constexpr const Status& status() const { return status_; }
+  Status status() const { return status_; }
 
   /// Gets the stored `T` value.
   ///
@@ -309,7 +313,6 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
     return ValueUnsafe();
   }
   const T& operator*() const& { return ValueOrDie(); }
-  const T* operator->() const { return &ValueOrDie(); }
 
   /// Gets a mutable reference to the stored `T` value.
   ///
@@ -324,7 +327,6 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
     return ValueUnsafe();
   }
   T& operator*() & { return ValueOrDie(); }
-  T* operator->() { return &ValueOrDie(); }
 
   /// Moves and returns the internally-stored `T` value.
   ///
@@ -371,14 +373,13 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
     if (ok()) {
       return MoveValueUnsafe();
     }
-    return std::forward<G>(generate_alternative)();
+    return generate_alternative();
   }
 
   /// Apply a function to the internally stored value to produce a new result or propagate
   /// the stored error.
   template <typename M>
-  typename EnsureResult<decltype(std::declval<M&&>()(std::declval<T&&>()))>::type Map(
-      M&& m) && {
+  typename std::result_of<M && (T)>::type Map(M&& m) && {
     if (!ok()) {
       return status();
     }
@@ -388,66 +389,45 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
   /// Apply a function to the internally stored value to produce a new result or propagate
   /// the stored error.
   template <typename M>
-  typename EnsureResult<decltype(std::declval<M&&>()(std::declval<const T&>()))>::type
-  Map(M&& m) const& {
+  typename std::result_of<M && (const T&)>::type Map(M&& m) const& {
     if (!ok()) {
       return status();
     }
     return std::forward<M>(m)(ValueUnsafe());
   }
 
-  /// Cast the internally stored value to produce a new result or propagate the stored
-  /// error.
-  template <typename U, typename E = typename std::enable_if<
-                            std::is_constructible<U, T>::value>::type>
-  Result<U> As() && {
-    if (!ok()) {
-      return status();
-    }
-    return U(MoveValueUnsafe());
+  const T& ValueUnsafe() const& {
+    return *internal::launder(reinterpret_cast<const T*>(&data_));
   }
 
-  /// Cast the internally stored value to produce a new result or propagate the stored
-  /// error.
-  template <typename U, typename E = typename std::enable_if<
-                            std::is_constructible<U, const T&>::value>::type>
-  Result<U> As() const& {
-    if (!ok()) {
-      return status();
-    }
-    return U(ValueUnsafe());
-  }
-
-  constexpr const T& ValueUnsafe() const& { return *storage_.get(); }
-
-  constexpr T& ValueUnsafe() & { return *storage_.get(); }
+  T& ValueUnsafe() & { return *internal::launder(reinterpret_cast<T*>(&data_)); }
 
   T ValueUnsafe() && { return MoveValueUnsafe(); }
 
-  T MoveValueUnsafe() { return std::move(*storage_.get()); }
+  T MoveValueUnsafe() {
+    return std::move(*internal::launder(reinterpret_cast<T*>(&data_)));
+  }
 
  private:
   Status status_;  // pointer-sized
-  internal::AlignedStorage<T> storage_;
+  typename std::aligned_storage<sizeof(T), alignof(T)>::type data_;
 
   template <typename U>
-  void ConstructValue(U&& u) noexcept {
-    storage_.construct(std::forward<U>(u));
+  void ConstructValue(U&& u) {
+    new (&data_) T(std::forward<U>(u));
   }
 
-  void Destroy() noexcept {
+  void Destroy() {
     if (ARROW_PREDICT_TRUE(status_.ok())) {
-      static_assert(offsetof(Result<T>, status_) == 0,
-                    "Status is guaranteed to be at the start of Result<>");
-      storage_.destroy();
+      internal::launder(reinterpret_cast<const T*>(&data_))->~T();
     }
   }
 };
 
-#define ARROW_ASSIGN_OR_RAISE_IMPL(result_name, lhs, rexpr)                              \
-  auto&& result_name = (rexpr);                                                          \
-  ARROW_RETURN_IF_(!(result_name).ok(), (result_name).status(), ARROW_STRINGIFY(rexpr)); \
-  lhs = std::move(result_name).ValueUnsafe();
+#define ARROW_ASSIGN_OR_RAISE_IMPL(result_name, lhs, rexpr) \
+  auto result_name = (rexpr);                               \
+  ARROW_RETURN_NOT_OK((result_name).status());              \
+  lhs = std::move(result_name).MoveValueUnsafe();
 
 #define ARROW_ASSIGN_OR_RAISE_NAME(x, y) ARROW_CONCAT(x, y)
 
@@ -464,14 +444,6 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
 /// WARNING: ARROW_ASSIGN_OR_RAISE expands into multiple statements;
 /// it cannot be used in a single statement (e.g. as the body of an if
 /// statement without {})!
-///
-/// WARNING: ARROW_ASSIGN_OR_RAISE `std::move`s its right operand. If you have
-/// an lvalue Result which you *don't* want to move out of cast appropriately.
-///
-/// WARNING: ARROW_ASSIGN_OR_RAISE is not a single expression; it will not
-/// maintain lifetimes of all temporaries in `rexpr` (e.g.
-/// `ARROW_ASSIGN_OR_RAISE(auto x, MakeTemp().GetResultRef());`
-/// will most likely segfault)!
 #define ARROW_ASSIGN_OR_RAISE(lhs, rexpr)                                              \
   ARROW_ASSIGN_OR_RAISE_IMPL(ARROW_ASSIGN_OR_RAISE_NAME(_error_or_value, __COUNTER__), \
                              lhs, rexpr);
@@ -479,7 +451,7 @@ class [[nodiscard]] Result : public util::EqualityComparable<Result<T>> {
 namespace internal {
 
 template <typename T>
-inline const Status& GenericToStatus(const Result<T>& res) {
+inline Status GenericToStatus(const Result<T>& res) {
   return res.status();
 }
 
@@ -489,20 +461,5 @@ inline Status GenericToStatus(Result<T>&& res) {
 }
 
 }  // namespace internal
-
-template <typename T, typename R = typename EnsureResult<T>::type>
-R ToResult(T t) {
-  return R(std::move(t));
-}
-
-template <typename T>
-struct EnsureResult {
-  using type = Result<T>;
-};
-
-template <typename T>
-struct EnsureResult<Result<T>> {
-  using type = Result<T>;
-};
 
 }  // namespace arrow

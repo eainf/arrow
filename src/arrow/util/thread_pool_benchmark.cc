@@ -74,7 +74,7 @@ struct Task {
 };
 
 // Benchmark ThreadPool::Spawn
-static void ThreadPoolSpawn(benchmark::State& state) {  // NOLINT non-const reference
+static void ThreadPoolSpawn(benchmark::State& state) {
   const auto nthreads = static_cast<int>(state.range(0));
   const auto workload_size = static_cast<int32_t>(state.range(1));
 
@@ -103,56 +103,8 @@ static void ThreadPoolSpawn(benchmark::State& state) {  // NOLINT non-const refe
   state.SetItemsProcessed(state.iterations() * nspawns);
 }
 
-// Benchmark SerialExecutor::RunInSerialExecutor
-static void RunInSerialExecutor(benchmark::State& state) {  // NOLINT non-const reference
-  const auto workload_size = static_cast<int32_t>(state.range(0));
-
-  Workload workload(workload_size);
-
-  for (auto _ : state) {
-    ABORT_NOT_OK(
-        SerialExecutor::RunInSerialExecutor<Future<>>([&](internal::Executor* executor) {
-          return DeferNotOk(executor->Submit(std::ref(workload)));
-        }));
-  }
-
-  state.SetItemsProcessed(state.iterations());
-}
-
-// Benchmark ThreadPool::Submit
-static void ThreadPoolSubmit(benchmark::State& state) {  // NOLINT non-const reference
-  const auto nthreads = static_cast<int>(state.range(0));
-  const auto workload_size = static_cast<int32_t>(state.range(1));
-
-  Workload workload(workload_size);
-
-  const int32_t nspawns = 10000000 / workload_size + 1;
-
-  for (auto _ : state) {
-    state.PauseTiming();
-    auto pool = *ThreadPool::Make(nthreads);
-    std::atomic<int32_t> n_finished{0};
-    state.ResumeTiming();
-
-    for (int32_t i = 0; i < nspawns; ++i) {
-      // Pass the task by reference to avoid copying it around
-      (void)DeferNotOk(pool->Submit(std::ref(workload))).Then([&]() {
-        n_finished.fetch_add(1);
-      });
-    }
-
-    // Wait for all tasks to finish
-    ABORT_NOT_OK(pool->Shutdown(true /* wait */));
-    ASSERT_EQ(n_finished.load(), nspawns);
-    state.PauseTiming();
-    pool.reset();
-    state.ResumeTiming();
-  }
-  state.SetItemsProcessed(state.iterations() * nspawns);
-}
-
 // Benchmark serial TaskGroup
-static void SerialTaskGroup(benchmark::State& state) {  // NOLINT non-const reference
+static void SerialTaskGroup(benchmark::State& state) {
   const auto workload_size = static_cast<int32_t>(state.range(0));
 
   Task task(workload_size);
@@ -171,7 +123,7 @@ static void SerialTaskGroup(benchmark::State& state) {  // NOLINT non-const refe
 }
 
 // Benchmark threaded TaskGroup
-static void ThreadedTaskGroup(benchmark::State& state) {  // NOLINT non-const reference
+static void ThreadedTaskGroup(benchmark::State& state) {
   const auto nthreads = static_cast<int>(state.range(0));
   const auto workload_size = static_cast<int32_t>(state.range(1));
 
@@ -184,13 +136,10 @@ static void ThreadedTaskGroup(benchmark::State& state) {  // NOLINT non-const re
 
   for (auto _ : state) {
     auto task_group = TaskGroup::MakeThreaded(pool.get());
-    task_group->Append([&task, nspawns, task_group] {
-      for (int32_t i = 0; i < nspawns; ++i) {
-        // Pass the task by reference to avoid copying it around
-        task_group->Append(std::ref(task));
-      }
-      return Status::OK();
-    });
+    for (int32_t i = 0; i < nspawns; ++i) {
+      // Pass the task by reference to avoid copying it around
+      task_group->Append(std::ref(task));
+    }
     ABORT_NOT_OK(task_group->Finish());
   }
   ABORT_NOT_OK(pool->Shutdown(true /* wait */));
@@ -198,10 +147,10 @@ static void ThreadedTaskGroup(benchmark::State& state) {  // NOLINT non-const re
   state.SetItemsProcessed(state.iterations() * nspawns);
 }
 
-static const std::vector<int32_t> kWorkloadSizes = {1000, 10000, 100000};
+static const int32_t kWorkloadSizes[] = {1000, 10000, 100000};
 
 static void WorkloadCost_Customize(benchmark::internal::Benchmark* b) {
-  for (const int32_t w : kWorkloadSizes) {
+  for (const auto w : kWorkloadSizes) {
     b->Args({w});
   }
   b->ArgNames({"task_cost"});
@@ -239,10 +188,8 @@ BENCHMARK(ReferenceWorkloadCost)->Apply(WorkloadCost_Customize);
 #endif
 
 BENCHMARK(SerialTaskGroup)->Apply(WorkloadCost_Customize);
-BENCHMARK(RunInSerialExecutor)->Apply(WorkloadCost_Customize);
 BENCHMARK(ThreadPoolSpawn)->Apply(ThreadPoolSpawn_Customize);
 BENCHMARK(ThreadedTaskGroup)->Apply(ThreadPoolSpawn_Customize);
-BENCHMARK(ThreadPoolSubmit)->Apply(ThreadPoolSpawn_Customize);
 
 }  // namespace internal
 }  // namespace arrow

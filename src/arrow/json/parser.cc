@@ -19,11 +19,8 @@
 
 #include <functional>
 #include <limits>
-#include <memory>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -32,23 +29,25 @@
 #include "rapidjson/reader.h"
 
 #include "arrow/array.h"
-#include "arrow/array/builder_binary.h"
 #include "arrow/buffer_builder.h"
+#include "arrow/builder.h"
+#include "arrow/memory_pool.h"
 #include "arrow/type.h"
-#include "arrow/util/bitset_stack.h"
-#include "arrow/util/checked_cast.h"
 #include "arrow/util/logging.h"
+#include "arrow/util/make_unique.h"
+#include "arrow/util/string_view.h"
 #include "arrow/util/trie.h"
-#include "arrow/visit_type_inline.h"
+#include "arrow/visitor_inline.h"
 
 namespace arrow {
-
-using internal::BitsetStack;
-using internal::checked_cast;
-
 namespace json {
 
 namespace rj = arrow::rapidjson;
+
+using internal::BitsetStack;
+using internal::checked_cast;
+using internal::make_unique;
+using util::string_view;
 
 template <typename... T>
 static Status ParseError(T&&... t) {
@@ -56,9 +55,8 @@ static Status ParseError(T&&... t) {
 }
 
 const std::string& Kind::Name(Kind::type kind) {
-  static const std::string names[] = {
-      "null", "boolean", "number", "string", "array", "object", "number_or_string",
-  };
+  static const std::string names[] = {"null",   "boolean", "number",
+                                      "string", "array",   "object"};
 
   return names[kind];
 }
@@ -71,15 +69,14 @@ const std::shared_ptr<const KeyValueMetadata>& Kind::Tag(Kind::type kind) {
       key_value_metadata({{"json_kind", Kind::Name(Kind::kString)}}),
       key_value_metadata({{"json_kind", Kind::Name(Kind::kArray)}}),
       key_value_metadata({{"json_kind", Kind::Name(Kind::kObject)}}),
-      key_value_metadata({{"json_kind", Kind::Name(Kind::kNumberOrString)}}),
   };
   return tags[kind];
 }
 
-static arrow::internal::Trie MakeFromTagTrie() {
-  arrow::internal::TrieBuilder builder;
+static internal::Trie MakeFromTagTrie() {
+  internal::TrieBuilder builder;
   for (auto kind : {Kind::kNull, Kind::kBoolean, Kind::kNumber, Kind::kString,
-                    Kind::kArray, Kind::kObject, Kind::kNumberOrString}) {
+                    Kind::kArray, Kind::kObject}) {
     DCHECK_OK(builder.Append(Kind::Name(kind)));
   }
   auto name_to_kind = builder.Finish();
@@ -88,9 +85,9 @@ static arrow::internal::Trie MakeFromTagTrie() {
 }
 
 Kind::type Kind::FromTag(const std::shared_ptr<const KeyValueMetadata>& tag) {
-  static arrow::internal::Trie name_to_kind = MakeFromTagTrie();
+  static internal::Trie name_to_kind = MakeFromTagTrie();
   DCHECK_NE(tag->FindKey("json_kind"), -1);
-  std::string_view name = tag->value(tag->FindKey("json_kind"));
+  util::string_view name = tag->value(tag->FindKey("json_kind"));
   DCHECK_NE(name_to_kind.Find(name), -1);
   return static_cast<Kind::type>(name_to_kind.Find(name));
 }
@@ -103,10 +100,7 @@ Status Kind::ForType(const DataType& type, Kind::type* kind) {
     Status Visit(const TimeType&) { return SetKind(Kind::kNumber); }
     Status Visit(const DateType&) { return SetKind(Kind::kNumber); }
     Status Visit(const BinaryType&) { return SetKind(Kind::kString); }
-    Status Visit(const LargeBinaryType&) { return SetKind(Kind::kString); }
-    Status Visit(const BinaryViewType&) { return SetKind(Kind::kString); }
-    Status Visit(const TimestampType&) { return SetKind(Kind::kString); }
-    Status Visit(const DecimalType&) { return SetKind(Kind::kNumberOrString); }
+    Status Visit(const FixedSizeBinaryType&) { return SetKind(Kind::kString); }
     Status Visit(const DictionaryType& dict_type) {
       return Kind::ForType(*dict_type.value_type(), kind_);
     }
@@ -160,34 +154,16 @@ struct BuilderPtr {
 
   bool operator!() const { return *this == null; }
 
-  // The static BuilderPtr for null type data
   static const BuilderPtr null;
 };
 
-const BuilderPtr BuilderPtr::null(Kind::kNull, 0, true);
-
-/// \brief Shared context for all value builders in a `RawBuilderSet`
-class BuildContext {
- public:
-  explicit BuildContext(MemoryPool* pool) : pool_(pool) {}
-
-  MemoryPool* pool() const { return pool_; }
-
-  // Finds or allocates a unique string and returns a persistent `std::string_view`
-  std::string_view InternString(std::string_view str) {
-    return *string_cache_.emplace(str).first;
-  }
-
- private:
-  MemoryPool* pool_;
-  std::unordered_set<std::string> string_cache_;
-};
+const BuilderPtr BuilderPtr::null(Kind::kNull, 0, false);
 
 template <>
 class RawArrayBuilder<Kind::kBoolean> {
  public:
-  explicit RawArrayBuilder(BuildContext* context)
-      : data_builder_(context->pool()), null_bitmap_builder_(context->pool()) {}
+  explicit RawArrayBuilder(MemoryPool* pool)
+      : data_builder_(pool), null_bitmap_builder_(pool) {}
 
   Status Append(bool value) {
     RETURN_NOT_OK(data_builder_.Append(value));
@@ -233,10 +209,8 @@ class RawArrayBuilder<Kind::kBoolean> {
 /// for indices referring into another array.
 class ScalarBuilder {
  public:
-  explicit ScalarBuilder(BuildContext* context)
-      : values_length_(0),
-        data_builder_(context->pool()),
-        null_bitmap_builder_(context->pool()) {}
+  explicit ScalarBuilder(MemoryPool* pool)
+      : values_length_(0), data_builder_(pool), null_bitmap_builder_(pool) {}
 
   Status Append(int32_t index, int32_t value_length) {
     RETURN_NOT_OK(data_builder_.Append(index));
@@ -289,8 +263,8 @@ class RawArrayBuilder<Kind::kString> : public ScalarBuilder {
 template <>
 class RawArrayBuilder<Kind::kArray> {
  public:
-  explicit RawArrayBuilder(BuildContext* context)
-      : offset_builder_(context->pool()), null_bitmap_builder_(context->pool()) {}
+  explicit RawArrayBuilder(MemoryPool* pool)
+      : offset_builder_(pool), null_bitmap_builder_(pool) {}
 
   Status Append(int32_t child_length) {
     RETURN_NOT_OK(offset_builder_.Append(offset_));
@@ -341,8 +315,7 @@ class RawArrayBuilder<Kind::kArray> {
 template <>
 class RawArrayBuilder<Kind::kObject> {
  public:
-  explicit RawArrayBuilder(BuildContext* context)
-      : context_(context), null_bitmap_builder_(context->pool()) {}
+  explicit RawArrayBuilder(MemoryPool* pool) : null_bitmap_builder_(pool) {}
 
   Status Append() { return null_bitmap_builder_.Append(true); }
 
@@ -350,62 +323,35 @@ class RawArrayBuilder<Kind::kObject> {
 
   Status AppendNull(int64_t count) { return null_bitmap_builder_.Append(count, false); }
 
-  int FindFieldIndex(std::string_view name) const {
-    auto it = name_to_index_.find(name);
-    return it != name_to_index_.end() ? it->second : -1;
+  std::string FieldName(int i) const {
+    for (const auto& name_index : name_to_index_) {
+      if (name_index.second == i) {
+        return name_index.first;
+      }
+    }
+    return "";
   }
 
-  int GetFieldIndex(std::string_view name) {
-    if (ARROW_PREDICT_FALSE(num_fields() == 0)) {
+  int GetFieldIndex(const std::string& name) const {
+    auto it = name_to_index_.find(name);
+    if (it == name_to_index_.end()) {
       return -1;
     }
+    return it->second;
+  }
 
-    if (next_index_ == -1) {
-      return FindFieldIndex(name);
-    }
-
-    if (next_index_ == num_fields()) {
-      next_index_ = 0;
-    }
-    // Field ordering has been predictable thus far, so check the expected index first
-    if (ARROW_PREDICT_TRUE(name == field_infos_[next_index_].name)) {
-      return next_index_++;
-    }
-
-    // Prediction failed - fall back to the map
-    auto index = FindFieldIndex(name);
-    if (ARROW_PREDICT_FALSE(index != -1)) {
-      // We already have this key, so the incoming fields are sparse and/or inconsistently
-      // ordered. At the risk of introducing crippling overhead for worst-case input, we
-      // bail on the optimization.
-      next_index_ = -1;
-    }
-
+  int AddField(std::string name, BuilderPtr builder) {
+    auto index = num_fields();
+    field_builders_.push_back(builder);
+    name_to_index_.emplace(std::move(name), index);
     return index;
   }
 
-  int AddField(std::string_view name, BuilderPtr builder) {
-    auto index = FindFieldIndex(name);
+  int num_fields() const { return static_cast<int>(field_builders_.size()); }
 
-    if (ARROW_PREDICT_TRUE(index == -1)) {
-      name = context_->InternString(name);
-      index = num_fields();
-      field_infos_.push_back(FieldInfo{name, builder});
-      name_to_index_.emplace(name, index);
-    }
+  BuilderPtr field_builder(int index) const { return field_builders_[index]; }
 
-    return index;
-  }
-
-  int num_fields() const { return static_cast<int>(field_infos_.size()); }
-
-  std::string_view field_name(int index) const { return field_infos_[index].name; }
-
-  BuilderPtr field_builder(int index) const { return field_infos_[index].builder; }
-
-  void field_builder(int index, BuilderPtr builder) {
-    field_infos_[index].builder = builder;
-  }
+  void field_builder(int index, BuilderPtr builder) { field_builders_[index] = builder; }
 
   Status Finish(std::function<Status(BuilderPtr, std::shared_ptr<Array>*)> finish_child,
                 std::shared_ptr<Array>* out) {
@@ -414,15 +360,19 @@ class RawArrayBuilder<Kind::kObject> {
     std::shared_ptr<Buffer> null_bitmap;
     RETURN_NOT_OK(null_bitmap_builder_.Finish(&null_bitmap));
 
+    std::vector<string_view> field_names(num_fields());
+    for (const auto& name_index : name_to_index_) {
+      field_names[name_index.second] = name_index.first;
+    }
+
     std::vector<std::shared_ptr<Field>> fields(num_fields());
     std::vector<std::shared_ptr<ArrayData>> child_data(num_fields());
     for (int i = 0; i < num_fields(); ++i) {
-      const auto& info = field_infos_[i];
       std::shared_ptr<Array> field_values;
-      RETURN_NOT_OK(finish_child(info.builder, &field_values));
+      RETURN_NOT_OK(finish_child(field_builders_[i], &field_values));
       child_data[i] = field_values->data();
-      fields[i] = field(std::string(info.name), field_values->type(),
-                        info.builder.nullable, Kind::Tag(info.builder.kind));
+      fields[i] = field(field_names[i].to_string(), field_values->type(),
+                        field_builders_[i].nullable, Kind::Tag(field_builders_[i].kind));
     }
 
     *out = MakeArray(ArrayData::Make(struct_(std::move(fields)), size, {null_bitmap},
@@ -433,32 +383,14 @@ class RawArrayBuilder<Kind::kObject> {
   int64_t length() { return null_bitmap_builder_.length(); }
 
  private:
-  struct FieldInfo {
-    std::string_view name;
-    BuilderPtr builder;
-  };
-
-  BuildContext* context_;
-
-  std::vector<FieldInfo> field_infos_;
-  std::unordered_map<std::string_view, int> name_to_index_;
-
+  std::vector<BuilderPtr> field_builders_;
+  std::unordered_map<std::string, int> name_to_index_;
   TypedBufferBuilder<bool> null_bitmap_builder_;
-
-  // Predictive index for optimizing name -> index lookups in cases where fields are
-  // consistently ordered.
-  int next_index_ = 0;
-};
-
-template <>
-class RawArrayBuilder<Kind::kNumberOrString> : public ScalarBuilder {
- public:
-  using ScalarBuilder::ScalarBuilder;
 };
 
 class RawBuilderSet {
  public:
-  explicit RawBuilderSet(MemoryPool* pool) : context_(pool) {}
+  explicit RawBuilderSet(MemoryPool* pool) : pool_(pool) {}
 
   /// Retrieve a pointer to a builder from a BuilderPtr
   template <Kind::type kind>
@@ -473,7 +405,7 @@ class RawBuilderSet {
     builder->index = static_cast<uint32_t>(arena<kind>().size());
     builder->kind = kind;
     builder->nullable = true;
-    arena<kind>().emplace_back(RawArrayBuilder<kind>(&context_));
+    arena<kind>().emplace_back(RawArrayBuilder<kind>(pool_));
     return Cast<kind>(*builder)->AppendNull(leading_nulls);
   }
 
@@ -495,12 +427,9 @@ class RawBuilderSet {
       case Kind::kString:
         return MakeBuilder<Kind::kString>(leading_nulls, builder);
 
-      case Kind::kNumberOrString:
-        return MakeBuilder<Kind::kNumberOrString>(leading_nulls, builder);
-
       case Kind::kArray: {
         RETURN_NOT_OK(MakeBuilder<Kind::kArray>(leading_nulls, builder));
-        const auto& list_type = checked_cast<const ListType&>(t);
+        const auto& list_type = static_cast<const ListType&>(t);
 
         BuilderPtr value_builder;
         RETURN_NOT_OK(MakeBuilder(*list_type.value_type(), 0, &value_builder));
@@ -511,9 +440,9 @@ class RawBuilderSet {
       }
       case Kind::kObject: {
         RETURN_NOT_OK(MakeBuilder<Kind::kObject>(leading_nulls, builder));
-        const auto& struct_type = checked_cast<const StructType&>(t);
+        const auto& struct_type = static_cast<const StructType&>(t);
 
-        for (const auto& f : struct_type.fields()) {
+        for (const auto& f : struct_type.children()) {
           BuilderPtr field_builder;
           RETURN_NOT_OK(MakeBuilder(*f->type(), leading_nulls, &field_builder));
           field_builder.nullable = f->nullable();
@@ -559,10 +488,6 @@ class RawBuilderSet {
       case Kind::kString:
         return Cast<Kind::kString>(builder)->AppendNull();
 
-      case Kind::kNumberOrString: {
-        return Cast<Kind::kNumberOrString>(builder)->AppendNull();
-      }
-
       case Kind::kArray:
         return Cast<Kind::kArray>(builder)->AppendNull();
 
@@ -576,7 +501,6 @@ class RawBuilderSet {
         }
         return Status::OK();
       }
-
       default:
         return Status::NotImplemented("invalid builder Kind");
     }
@@ -602,9 +526,6 @@ class RawBuilderSet {
 
       case Kind::kString:
         return FinishScalar(scalar_values, Cast<Kind::kString>(builder), out);
-
-      case Kind::kNumberOrString:
-        return FinishScalar(scalar_values, Cast<Kind::kNumberOrString>(builder), out);
 
       case Kind::kArray:
         return Cast<Kind::kArray>(builder)->Finish(std::move(finish_children), out);
@@ -634,13 +555,12 @@ class RawBuilderSet {
     return std::get<static_cast<std::size_t>(kind)>(arenas_);
   }
 
-  BuildContext context_;
+  MemoryPool* pool_;
   std::tuple<std::tuple<>, std::vector<RawArrayBuilder<Kind::kBoolean>>,
              std::vector<RawArrayBuilder<Kind::kNumber>>,
              std::vector<RawArrayBuilder<Kind::kString>>,
              std::vector<RawArrayBuilder<Kind::kArray>>,
-             std::vector<RawArrayBuilder<Kind::kObject>>,
-             std::vector<RawArrayBuilder<Kind::kNumberOrString>>>
+             std::vector<RawArrayBuilder<Kind::kObject>>>
       arenas_;
 };
 
@@ -687,22 +607,12 @@ class HandlerBase : public BlockParser,
   }
 
   bool RawNumber(const char* data, rj::SizeType size, ...) {
-    if (builder_.kind == Kind::kNumberOrString) {
-      status_ =
-          AppendScalar<Kind::kNumberOrString>(builder_, std::string_view(data, size));
-    } else {
-      status_ = AppendScalar<Kind::kNumber>(builder_, std::string_view(data, size));
-    }
+    status_ = AppendScalar<Kind::kNumber>(builder_, string_view(data, size));
     return status_.ok();
   }
 
   bool String(const char* data, rj::SizeType size, ...) {
-    if (builder_.kind == Kind::kNumberOrString) {
-      status_ =
-          AppendScalar<Kind::kNumberOrString>(builder_, std::string_view(data, size));
-    } else {
-      status_ = AppendScalar<Kind::kString>(builder_, std::string_view(data, size));
-    }
+    status_ = AppendScalar<Kind::kString>(builder_, string_view(data, size));
     return status_.ok();
   }
 
@@ -755,7 +665,7 @@ class HandlerBase : public BlockParser,
         if (i + 1 < field_index_stack_.size()) {
           field_index = field_index_stack_[i + 1];
         }
-        path += "/" + std::string(struct_builder->field_name(field_index));
+        path += "/" + struct_builder->FieldName(field_index);
       }
     }
     return path;
@@ -763,23 +673,20 @@ class HandlerBase : public BlockParser,
 
  protected:
   template <typename Handler, typename Stream>
-  Status DoParse(Handler& handler, Stream&& json, size_t json_size) {
+  Status DoParse(Handler& handler, Stream&& json) {
     constexpr auto parse_flags = rj::kParseIterativeFlag | rj::kParseNanAndInfFlag |
                                  rj::kParseStopWhenDoneFlag |
                                  rj::kParseNumbersAsStringsFlag;
 
     rj::Reader reader;
-    // ensure that the loop can exit when the block too large.
-    for (; num_rows_ < std::numeric_limits<int32_t>::max(); ++num_rows_) {
+
+    for (; num_rows_ < kMaxParserNumRows; ++num_rows_) {
       auto ok = reader.Parse<parse_flags>(json, handler);
       switch (ok.Code()) {
         case rj::kParseErrorNone:
           // parse the next object
           continue;
         case rj::kParseErrorDocumentEmpty:
-          if (json.Tell() < json_size) {
-            return ParseError(rj::GetParseError_En(ok.Code()));
-          }
           // parsed all objects, finish
           return Status::OK();
         case rj::kParseErrorTermination:
@@ -790,7 +697,7 @@ class HandlerBase : public BlockParser,
           return ParseError(rj::GetParseError_En(ok.Code()), " in row ", num_rows_);
       }
     }
-    return Status::Invalid("Row count overflowed int32_t");
+    return Status::Invalid("Exceeded maximum rows");
   }
 
   template <typename Handler>
@@ -798,7 +705,7 @@ class HandlerBase : public BlockParser,
     RETURN_NOT_OK(ReserveScalarStorage(json->size()));
     rj::MemoryStream ms(reinterpret_cast<const char*>(json->data()), json->size());
     using InputStream = rj::EncodedInputStream<rj::UTF8<>, rj::MemoryStream>;
-    return DoParse(handler, InputStream(ms), static_cast<size_t>(json->size()));
+    return DoParse(handler, InputStream(ms));
   }
 
   /// \defgroup handlerbase-append-methods append non-nested values
@@ -806,7 +713,7 @@ class HandlerBase : public BlockParser,
   /// @{
 
   template <Kind::type kind>
-  Status AppendScalar(BuilderPtr builder, std::string_view scalar) {
+  Status AppendScalar(BuilderPtr builder, string_view scalar) {
     if (ARROW_PREDICT_FALSE(builder.kind != kind)) {
       return IllegallyChangedTo(kind);
     }
@@ -835,19 +742,13 @@ class HandlerBase : public BlockParser,
   ///
   /// sets the field builder with name key, or returns false if
   /// there is no field with that name
-  bool SetFieldBuilder(std::string_view key, bool* duplicate_keys) {
+  bool SetFieldBuilder(string_view key, bool* duplicate_keys) {
     auto parent = Cast<Kind::kObject>(builder_stack_.back());
-    field_index_ = parent->GetFieldIndex(key);
+    field_index_ = parent->GetFieldIndex(std::string(key));
     if (ARROW_PREDICT_FALSE(field_index_ == -1)) {
       return false;
     }
-    if (field_index_ < absent_fields_stack_.TopSize()) {
-      *duplicate_keys = !absent_fields_stack_[field_index_];
-    } else {
-      // When field_index is beyond the range of absent_fields_stack_ we have a duplicated
-      // field that wasn't declared in schema or previous records.
-      *duplicate_keys = true;
-    }
+    *duplicate_keys = !absent_fields_stack_[field_index_];
     if (*duplicate_keys) {
       status_ = ParseError("Column(", Path(), ") was specified twice in row ", num_rows_);
       return false;
@@ -960,8 +861,7 @@ class Handler<UnexpectedFieldBehavior::Error> : public HandlerBase {
   /// if an unexpected field is encountered, emit a parse error and bail
   bool Key(const char* key, rj::SizeType len, ...) {
     bool duplicate_keys = false;
-    if (ARROW_PREDICT_FALSE(
-            SetFieldBuilder(std::string_view(key, len), &duplicate_keys))) {
+    if (ARROW_PREDICT_FALSE(SetFieldBuilder(string_view(key, len), &duplicate_keys))) {
       return true;
     }
     if (!duplicate_keys) {
@@ -1025,8 +925,7 @@ class Handler<UnexpectedFieldBehavior::Ignore> : public HandlerBase {
       return true;
     }
     bool duplicate_keys = false;
-    if (ARROW_PREDICT_TRUE(
-            SetFieldBuilder(std::string_view(key, len), &duplicate_keys))) {
+    if (ARROW_PREDICT_TRUE(SetFieldBuilder(string_view(key, len), &duplicate_keys))) {
       return true;
     }
     if (ARROW_PREDICT_FALSE(duplicate_keys)) {
@@ -1117,8 +1016,7 @@ class Handler<UnexpectedFieldBehavior::InferType> : public HandlerBase {
   /// will probably trigger promotion of this field from null
   bool Key(const char* key, rj::SizeType len, ...) {
     bool duplicate_keys = false;
-    if (ARROW_PREDICT_TRUE(
-            SetFieldBuilder(std::string_view(key, len), &duplicate_keys))) {
+    if (ARROW_PREDICT_TRUE(SetFieldBuilder(string_view(key, len), &duplicate_keys))) {
       return true;
     }
     if (ARROW_PREDICT_FALSE(duplicate_keys)) {
@@ -1127,7 +1025,7 @@ class Handler<UnexpectedFieldBehavior::InferType> : public HandlerBase {
     auto struct_builder = Cast<Kind::kObject>(builder_stack_.back());
     auto leading_nulls = static_cast<uint32_t>(struct_builder->length() - 1);
     builder_ = BuilderPtr(Kind::kNull, leading_nulls, true);
-    field_index_ = struct_builder->AddField(std::string_view(key, len), builder_);
+    field_index_ = struct_builder->AddField(std::string(key, len), builder_);
     return true;
   }
 
@@ -1176,15 +1074,15 @@ Status BlockParser::Make(MemoryPool* pool, const ParseOptions& options,
 
   switch (options.unexpected_field_behavior) {
     case UnexpectedFieldBehavior::Ignore: {
-      *out = std::make_unique<Handler<UnexpectedFieldBehavior::Ignore>>(pool);
+      *out = make_unique<Handler<UnexpectedFieldBehavior::Ignore>>(pool);
       break;
     }
     case UnexpectedFieldBehavior::Error: {
-      *out = std::make_unique<Handler<UnexpectedFieldBehavior::Error>>(pool);
+      *out = make_unique<Handler<UnexpectedFieldBehavior::Error>>(pool);
       break;
     }
     case UnexpectedFieldBehavior::InferType:
-      *out = std::make_unique<Handler<UnexpectedFieldBehavior::InferType>>(pool);
+      *out = make_unique<Handler<UnexpectedFieldBehavior::InferType>>(pool);
       break;
   }
   return static_cast<HandlerBase&>(**out).Initialize(options.explicit_schema);

@@ -35,20 +35,20 @@ class GANDIVA_EXPORT ToDateHolder : public FunctionHolder {
  public:
   ~ToDateHolder() override = default;
 
-  static Result<std::shared_ptr<ToDateHolder>> Make(const FunctionNode& node);
+  static Status Make(const FunctionNode& node, std::shared_ptr<ToDateHolder>* holder);
 
-  static Result<std::shared_ptr<ToDateHolder>> Make(const std::string& sql_pattern,
-                                                    int32_t suppress_errors);
+  static Status Make(const std::string& sql_pattern, int32_t suppress_errors,
+                     std::shared_ptr<ToDateHolder>* holder);
 
   /// Return true if the data matches the pattern.
-  int64_t operator()(ExecutionContext* context, const char* data, int data_len,
-                     bool in_valid, bool* out_valid);
+  int64_t operator()(ExecutionContext* context, const std::string& data, bool in_valid,
+                     bool* out_valid);
 
  private:
   ToDateHolder(const std::string& pattern, int32_t suppress_errors)
       : pattern_(pattern), suppress_errors_(suppress_errors) {}
 
-  void return_error(ExecutionContext* context, const char* data, int data_len);
+  void return_error(ExecutionContext* context, const std::string& data);
 
   std::string pattern_;  // date format string
 

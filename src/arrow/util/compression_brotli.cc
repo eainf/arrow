@@ -38,6 +38,8 @@ namespace {
 
 class BrotliDecompressor : public Decompressor {
  public:
+  BrotliDecompressor() {}
+
   ~BrotliDecompressor() override {
     if (state_ != nullptr) {
       BrotliDecoderDestroyInstance(state_);
@@ -92,8 +94,8 @@ class BrotliDecompressor : public Decompressor {
 
 class BrotliCompressor : public Compressor {
  public:
-  explicit BrotliCompressor(int compression_level, int window_bits)
-      : compression_level_(compression_level), window_bits_(window_bits) {}
+  explicit BrotliCompressor(int compression_level)
+      : compression_level_(compression_level) {}
 
   ~BrotliCompressor() override {
     if (state_ != nullptr) {
@@ -108,9 +110,6 @@ class BrotliCompressor : public Compressor {
     }
     if (!BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, compression_level_)) {
       return BrotliError("Brotli set compression level failed");
-    }
-    if (!BrotliEncoderSetParameter(state_, BROTLI_PARAM_LGWIN, window_bits_)) {
-      return BrotliError("Brotli set window size failed");
     }
     return Status::OK();
   }
@@ -168,8 +167,7 @@ class BrotliCompressor : public Compressor {
   BrotliEncoderState* state_ = nullptr;
 
  private:
-  const int compression_level_;
-  const int window_bits_;
+  int compression_level_;
 };
 
 // ----------------------------------------------------------------------
@@ -177,11 +175,11 @@ class BrotliCompressor : public Compressor {
 
 class BrotliCodec : public Codec {
  public:
-  explicit BrotliCodec(int compression_level, int window_bits)
-      : compression_level_(compression_level == kUseDefaultCompressionLevel
-                               ? kBrotliDefaultCompressionLevel
-                               : compression_level),
-        window_bits_(window_bits) {}
+  explicit BrotliCodec(int compression_level) {
+    compression_level_ = compression_level == kUseDefaultCompressionLevel
+                             ? kBrotliDefaultCompressionLevel
+                             : compression_level;
+  }
 
   Result<int64_t> Decompress(int64_t input_len, const uint8_t* input,
                              int64_t output_buffer_len, uint8_t* output_buffer) override {
@@ -206,16 +204,16 @@ class BrotliCodec : public Codec {
     DCHECK_GE(input_len, 0);
     DCHECK_GE(output_buffer_len, 0);
     std::size_t output_size = static_cast<size_t>(output_buffer_len);
-    if (BrotliEncoderCompress(compression_level_, window_bits_, BROTLI_DEFAULT_MODE,
-                              static_cast<size_t>(input_len), input, &output_size,
-                              output_buffer) == BROTLI_FALSE) {
+    if (BrotliEncoderCompress(compression_level_, BROTLI_DEFAULT_WINDOW,
+                              BROTLI_DEFAULT_MODE, static_cast<size_t>(input_len), input,
+                              &output_size, output_buffer) == BROTLI_FALSE) {
       return Status::IOError("Brotli compression failure.");
     }
     return output_size;
   }
 
   Result<std::shared_ptr<Compressor>> MakeCompressor() override {
-    auto ptr = std::make_shared<BrotliCompressor>(compression_level_, window_bits_);
+    auto ptr = std::make_shared<BrotliCompressor>(compression_level_);
     RETURN_NOT_OK(ptr->Init());
     return ptr;
   }
@@ -226,34 +224,16 @@ class BrotliCodec : public Codec {
     return ptr;
   }
 
-  Status Init() override {
-    if (window_bits_ < BROTLI_MIN_WINDOW_BITS || window_bits_ > BROTLI_MAX_WINDOW_BITS) {
-      return Status::Invalid("Brotli window_bits should be between ",
-                             BROTLI_MIN_WINDOW_BITS, " and ", BROTLI_MAX_WINDOW_BITS);
-    }
-    return Status::OK();
-  }
-
-  Compression::type compression_type() const override { return Compression::BROTLI; }
-
-  int compression_level() const override { return compression_level_; }
-  int minimum_compression_level() const override { return BROTLI_MIN_QUALITY; }
-  int maximum_compression_level() const override { return BROTLI_MAX_QUALITY; }
-  int default_compression_level() const override {
-    return kBrotliDefaultCompressionLevel;
-  }
+  const char* name() const override { return "brotli"; }
 
  private:
-  const int compression_level_;
-  const int window_bits_;
+  int compression_level_;
 };
 
 }  // namespace
 
-std::unique_ptr<Codec> MakeBrotliCodec(int compression_level,
-                                       std::optional<int> window_bits) {
-  return std::make_unique<BrotliCodec>(compression_level,
-                                       window_bits.value_or(BROTLI_DEFAULT_WINDOW));
+std::unique_ptr<Codec> MakeBrotliCodec(int compression_level) {
+  return std::unique_ptr<Codec>(new BrotliCodec(compression_level));
 }
 
 }  // namespace internal

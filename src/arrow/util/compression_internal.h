@@ -35,38 +35,34 @@ constexpr int kBrotliDefaultCompressionLevel = 8;
 
 // Brotli codec.
 std::unique_ptr<Codec> MakeBrotliCodec(
-    int compression_level = kBrotliDefaultCompressionLevel,
-    std::optional<int> window_bits = std::nullopt);
+    int compression_level = kBrotliDefaultCompressionLevel);
 
 // BZ2 codec.
 constexpr int kBZ2DefaultCompressionLevel = 9;
-
 std::unique_ptr<Codec> MakeBZ2Codec(int compression_level = kBZ2DefaultCompressionLevel);
 
 // GZip
 constexpr int kGZipDefaultCompressionLevel = 9;
 
+struct GZipFormat {
+  enum type {
+    ZLIB,
+    DEFLATE,
+    GZIP,
+  };
+};
+
 std::unique_ptr<Codec> MakeGZipCodec(int compression_level = kGZipDefaultCompressionLevel,
-                                     GZipFormat format = GZipFormat::GZIP,
-                                     std::optional<int> window_bits = std::nullopt);
+                                     GZipFormat::type format = GZipFormat::GZIP);
 
 // Snappy
 std::unique_ptr<Codec> MakeSnappyCodec();
 
-// Lz4 Codecs
-constexpr int kLz4DefaultCompressionLevel = 1;
+// Lz4 "raw" format codec.
+std::unique_ptr<Codec> MakeLz4RawCodec();
 
 // Lz4 frame format codec.
-
-std::unique_ptr<Codec> MakeLz4FrameCodec(
-    int compression_level = kLz4DefaultCompressionLevel);
-
-// Lz4 "raw" format codec.
-std::unique_ptr<Codec> MakeLz4RawCodec(
-    int compression_level = kLz4DefaultCompressionLevel);
-
-// Lz4 "Hadoop" format codec (== Lz4 raw codec prefixed with lengths header)
-std::unique_ptr<Codec> MakeLz4HadoopRawCodec();
+std::unique_ptr<Codec> MakeLz4FrameCodec();
 
 // ZSTD codec.
 

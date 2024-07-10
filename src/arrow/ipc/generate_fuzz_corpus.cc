@@ -44,7 +44,7 @@ using ::arrow::internal::PlatformFilename;
 using internal::json::ArrayFromJSON;
 
 Result<std::shared_ptr<RecordBatch>> MakeExtensionBatch() {
-  auto array = ExampleUuid();
+  auto array = ExampleUUID();
   auto md = key_value_metadata({"key1", "key2"}, {"value1", ""});
   auto schema = ::arrow::schema({field("f0", array->type())}, md);
   return RecordBatch::Make(schema, array->length(), {array});
@@ -60,7 +60,7 @@ Result<std::shared_ptr<RecordBatch>> MakeMapBatch() {
     []
   ]
 )";
-  ARROW_ASSIGN_OR_RAISE(array, ArrayFromJSON(map(int16(), int32()), json_input));
+  RETURN_NOT_OK(ArrayFromJSON(map(int16(), int32()), json_input, &array));
   auto schema = ::arrow::schema({field("f0", array->type())});
   return RecordBatch::Make(schema, array->length(), {array});
 }
@@ -73,8 +73,6 @@ Result<std::vector<std::shared_ptr<RecordBatch>>> Batches() {
   RETURN_NOT_OK(test::MakeNullRecordBatch(&batch));
   batches.push_back(batch);
   RETURN_NOT_OK(test::MakeListRecordBatch(&batch));
-  batches.push_back(batch);
-  RETURN_NOT_OK(test::MakeListViewRecordBatch(&batch));
   batches.push_back(batch);
   RETURN_NOT_OK(test::MakeDictionary(&batch));
   batches.push_back(batch);
@@ -101,9 +99,9 @@ Result<std::shared_ptr<Buffer>> SerializeRecordBatch(
   ARROW_ASSIGN_OR_RAISE(auto sink, io::BufferOutputStream::Create(1024));
   std::shared_ptr<RecordBatchWriter> writer;
   if (is_stream_format) {
-    ARROW_ASSIGN_OR_RAISE(writer, MakeStreamWriter(sink, batch->schema()));
+    ARROW_ASSIGN_OR_RAISE(writer, NewStreamWriter(sink.get(), batch->schema()));
   } else {
-    ARROW_ASSIGN_OR_RAISE(writer, MakeFileWriter(sink, batch->schema()));
+    ARROW_ASSIGN_OR_RAISE(writer, NewFileWriter(sink.get(), batch->schema()));
   }
   RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
   RETURN_NOT_OK(writer->Close());

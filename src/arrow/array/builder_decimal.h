@@ -19,28 +19,19 @@
 
 #include <memory>
 
-#include "arrow/array/array_decimal.h"
 #include "arrow/array/builder_base.h"
 #include "arrow/array/builder_binary.h"
-#include "arrow/array/data.h"
-#include "arrow/status.h"
-#include "arrow/type.h"
-#include "arrow/util/visibility.h"
 
 namespace arrow {
 
-/// \addtogroup numeric-builders
-///
-/// @{
+class Decimal128;
 
 class ARROW_EXPORT Decimal128Builder : public FixedSizeBinaryBuilder {
  public:
   using TypeClass = Decimal128Type;
-  using ValueType = Decimal128;
 
   explicit Decimal128Builder(const std::shared_ptr<DataType>& type,
-                             MemoryPool* pool = default_memory_pool(),
-                             int64_t alignment = kDefaultBufferAlignment);
+                             MemoryPool* pool = default_memory_pool());
 
   using FixedSizeBinaryBuilder::Append;
   using FixedSizeBinaryBuilder::AppendValues;
@@ -48,7 +39,7 @@ class ARROW_EXPORT Decimal128Builder : public FixedSizeBinaryBuilder {
 
   Status Append(Decimal128 val);
   void UnsafeAppend(Decimal128 val);
-  void UnsafeAppend(std::string_view val);
+  void UnsafeAppend(util::string_view val);
 
   Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
@@ -64,39 +55,6 @@ class ARROW_EXPORT Decimal128Builder : public FixedSizeBinaryBuilder {
   std::shared_ptr<Decimal128Type> decimal_type_;
 };
 
-class ARROW_EXPORT Decimal256Builder : public FixedSizeBinaryBuilder {
- public:
-  using TypeClass = Decimal256Type;
-  using ValueType = Decimal256;
-
-  explicit Decimal256Builder(const std::shared_ptr<DataType>& type,
-                             MemoryPool* pool = default_memory_pool(),
-                             int64_t alignment = kDefaultBufferAlignment);
-
-  using FixedSizeBinaryBuilder::Append;
-  using FixedSizeBinaryBuilder::AppendValues;
-  using FixedSizeBinaryBuilder::Reset;
-
-  Status Append(const Decimal256& val);
-  void UnsafeAppend(const Decimal256& val);
-  void UnsafeAppend(std::string_view val);
-
-  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
-
-  /// \cond FALSE
-  using ArrayBuilder::Finish;
-  /// \endcond
-
-  Status Finish(std::shared_ptr<Decimal256Array>* out) { return FinishTyped(out); }
-
-  std::shared_ptr<DataType> type() const override { return decimal_type_; }
-
- protected:
-  std::shared_ptr<Decimal256Type> decimal_type_;
-};
-
 using DecimalBuilder = Decimal128Builder;
-
-/// @}
 
 }  // namespace arrow

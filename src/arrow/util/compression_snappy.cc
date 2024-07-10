@@ -41,6 +41,8 @@ namespace {
 
 class SnappyCodec : public Codec {
  public:
+  SnappyCodec() {}
+
   Result<int64_t> Decompress(int64_t input_len, const uint8_t* input,
                              int64_t output_buffer_len, uint8_t* output_buffer) override {
     size_t decompressed_size;
@@ -85,15 +87,14 @@ class SnappyCodec : public Codec {
     return Status::NotImplemented("Streaming decompression unsupported with Snappy");
   }
 
-  Compression::type compression_type() const override { return Compression::SNAPPY; }
-  int minimum_compression_level() const override { return kUseDefaultCompressionLevel; }
-  int maximum_compression_level() const override { return kUseDefaultCompressionLevel; }
-  int default_compression_level() const override { return kUseDefaultCompressionLevel; }
+  const char* name() const override { return "snappy"; }
 };
 
 }  // namespace
 
-std::unique_ptr<Codec> MakeSnappyCodec() { return std::make_unique<SnappyCodec>(); }
+std::unique_ptr<Codec> MakeSnappyCodec() {
+  return std::unique_ptr<Codec>(new SnappyCodec());
+}
 
 }  // namespace internal
 }  // namespace util

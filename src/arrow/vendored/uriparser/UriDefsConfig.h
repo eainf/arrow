@@ -82,8 +82,7 @@
 /* Intel C/C++ */
 /* http://predef.sourceforge.net/precomp.html#sec20 */
 /* http://www.intel.com/support/performancetools/c/windows/sb/CS-007751.htm#2 */
-/* EDIT 11/5/20. Intel changed __force_inline to __forceinline */
-# define URI_INLINE __forceinline
+# define URI_INLINE __force_inline
 #elif defined(_MSC_VER)
 /* Microsoft Visual C++ */
 /* http://predef.sourceforge.net/precomp.html#sec32 */

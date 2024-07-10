@@ -35,7 +35,6 @@
 #include "arrow/type.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/compression.h"
-#include "arrow/util/config.h"
 
 namespace arrow {
 
@@ -53,19 +52,26 @@ struct TestParam {
   Compression::type compression;
 };
 
-void PrintTo(const TestParam& p, std::ostream* os) {
-  *os << "{version = " << p.version
-      << ", compression = " << ::arrow::util::Codec::GetCodecAsString(p.compression)
-      << "}";
-}
-
-class TestFeatherBase {
+class TestFeather : public ::testing::TestWithParam<TestParam> {
  public:
   void SetUp() { Initialize(); }
 
   void Initialize() { ASSERT_OK_AND_ASSIGN(stream_, io::BufferOutputStream::Create()); }
 
-  virtual WriteProperties GetProperties() = 0;
+  WriteProperties GetProperties() {
+    auto param = GetParam();
+
+    auto props = WriteProperties::Defaults();
+    props.version = param.version;
+
+    // Don't fail if the build doesn't have LZ4_FRAME or ZSTD enabled
+    if (util::Codec::IsAvailable(param.compression)) {
+      props.compression = param.compression;
+    } else {
+      props.compression = Compression::UNCOMPRESSED;
+    }
+    return props;
+  }
 
   void DoWrite(const Table& table) {
     Initialize();
@@ -82,7 +88,6 @@ class TestFeatherBase {
     DoWrite(*table);
     std::shared_ptr<Table> result;
     ASSERT_OK(reader_->Read(&result));
-    ASSERT_OK(result->ValidateFull());
     if (table->num_rows() > 0) {
       AssertTablesEqual(*table, *result);
     } else {
@@ -109,7 +114,6 @@ class TestFeatherBase {
 
     std::shared_ptr<Table> read_table;
     ASSERT_OK(reader_->Read(&read_table));
-    ASSERT_OK(read_table->ValidateFull());
     AssertTablesEqual(*table, *read_table);
   }
 
@@ -117,43 +121,6 @@ class TestFeatherBase {
   std::shared_ptr<io::BufferOutputStream> stream_;
   std::shared_ptr<Reader> reader_;
   std::shared_ptr<Buffer> output_;
-};
-
-class TestFeather : public ::testing::TestWithParam<TestParam>, public TestFeatherBase {
- public:
-  void SetUp() { TestFeatherBase::SetUp(); }
-
-  WriteProperties GetProperties() {
-    auto param = GetParam();
-
-    auto props = WriteProperties::Defaults();
-    props.version = param.version;
-
-    // Don't fail if the build doesn't have LZ4_FRAME or ZSTD enabled
-    if (util::Codec::IsAvailable(param.compression)) {
-      props.compression = param.compression;
-    } else {
-      props.compression = Compression::UNCOMPRESSED;
-    }
-    return props;
-  }
-};
-
-class TestFeatherRoundTrip : public ::testing::TestWithParam<ipc::test::MakeRecordBatch*>,
-                             public TestFeatherBase {
- public:
-  void SetUp() { TestFeatherBase::SetUp(); }
-
-  WriteProperties GetProperties() {
-    auto props = WriteProperties::Defaults();
-    props.version = kFeatherV2Version;
-
-    // Don't fail if the build doesn't have LZ4_FRAME or ZSTD enabled
-    if (!util::Codec::IsAvailable(props.compression)) {
-      props.compression = Compression::UNCOMPRESSED;
-    }
-    return props;
-  }
 };
 
 TEST(TestFeatherWriteProperties, Defaults) {
@@ -174,16 +141,15 @@ TEST_P(TestFeather, ReadIndicesOrNames) {
 
   DoWrite(*table);
 
-  // int32 type is at the column f4 of the result of MakeIntRecordBatch
-  auto expected = Table::Make(schema({field("f4", int32())}), {batch1->column(4)});
+  auto expected = Table::Make(schema({field("f1", int32())}), {batch1->column(1)});
 
   std::shared_ptr<Table> result1, result2;
 
-  std::vector<int> indices = {4};
+  std::vector<int> indices = {1};
   ASSERT_OK(reader_->Read(indices, &result1));
   AssertTablesEqual(*expected, *result1);
 
-  std::vector<std::string> names = {"f4"};
+  std::vector<std::string> names = {"f1"};
   ASSERT_OK(reader_->Read(names, &result2));
   AssertTablesEqual(*expected, *result2);
 }
@@ -208,16 +174,17 @@ TEST_P(TestFeather, SetNumRows) {
   ASSERT_EQ(1000, result->num_rows());
 }
 
-TEST_P(TestFeather, PrimitiveIntRoundTrip) {
+TEST_P(TestFeather, PrimitiveRoundTrip) {
   std::shared_ptr<RecordBatch> batch;
   ASSERT_OK(ipc::test::MakeIntRecordBatch(&batch));
-  CheckRoundtrip(batch);
-}
 
-TEST_P(TestFeather, PrimitiveFloatRoundTrip) {
-  std::shared_ptr<RecordBatch> batch;
-  ASSERT_OK(ipc::test::MakeFloat3264Batch(&batch));
-  CheckRoundtrip(batch);
+  ASSERT_OK_AND_ASSIGN(auto table, Table::FromRecordBatches({batch}));
+
+  DoWrite(*table);
+
+  std::shared_ptr<Table> result;
+  ASSERT_OK(reader_->Read(&result));
+  AssertTablesEqual(*table, *result);
 }
 
 TEST_P(TestFeather, CategoryRoundtrip) {
@@ -227,15 +194,24 @@ TEST_P(TestFeather, CategoryRoundtrip) {
 }
 
 TEST_P(TestFeather, TimeTypes) {
+  std::vector<bool> is_valid = {true, true, true, false, true, true, true};
   auto f0 = field("f0", date32());
   auto f1 = field("f1", time32(TimeUnit::MILLI));
   auto f2 = field("f2", timestamp(TimeUnit::NANO));
   auto f3 = field("f3", timestamp(TimeUnit::SECOND, "US/Los_Angeles"));
   auto schema = ::arrow::schema({f0, f1, f2, f3});
 
-  auto values64 = ArrayFromJSON(int64(), "[0, 1, null, null, 4, 5, 6]");
-  auto values32 = ArrayFromJSON(int32(), "[10, null, 12, 13, 14, 15, null]");
-  auto date_array = ArrayFromJSON(date32(), "[20, 21, 22, 23, 24, null, 26]");
+  std::vector<int64_t> values64_vec = {0, 1, 2, 3, 4, 5, 6};
+  std::shared_ptr<Array> values64;
+  ArrayFromVector<Int64Type, int64_t>(is_valid, values64_vec, &values64);
+
+  std::vector<int32_t> values32_vec = {10, 11, 12, 13, 14, 15, 16};
+  std::shared_ptr<Array> values32;
+  ArrayFromVector<Int32Type, int32_t>(is_valid, values32_vec, &values32);
+
+  std::vector<int32_t> date_values_vec = {20, 21, 22, 23, 24, 25, 26};
+  std::shared_ptr<Array> date_array;
+  ArrayFromVector<Date32Type, int32_t>(is_valid, date_values_vec, &date_array);
 
   const auto& prim_values64 = checked_cast<const PrimitiveArray&>(*values64);
   BufferVector buffers64 = {prim_values64.null_bitmap(), prim_values64.values()};
@@ -265,8 +241,7 @@ TEST_P(TestFeather, TimeTypes) {
 
 TEST_P(TestFeather, VLenPrimitiveRoundTrip) {
   std::shared_ptr<RecordBatch> batch;
-  ASSERT_OK(ipc::test::MakeStringTypesRecordBatch(&batch, /*with_nulls=*/true,
-                                                  /*with_view_types=*/false));
+  ASSERT_OK(ipc::test::MakeStringTypesRecordBatch(&batch));
   CheckRoundtrip(batch);
 }
 
@@ -285,31 +260,25 @@ TEST_P(TestFeather, PrimitiveNullRoundTrip) {
     std::vector<std::shared_ptr<Array>> expected_fields;
     for (int i = 0; i < batch->num_columns(); ++i) {
       ASSERT_EQ(batch->column_name(i), reader_->schema()->field(i)->name());
-      ASSERT_OK_AND_ASSIGN(auto expected, MakeArrayOfNull(utf8(), batch->num_rows()));
-      AssertArraysEqual(*expected, *result->column(i)->chunk(0));
+      StringArray str_values(batch->column(i)->length(), nullptr, nullptr,
+                             batch->column(i)->null_bitmap(),
+                             batch->column(i)->null_count());
+      AssertArraysEqual(str_values, *result->column(i)->chunk(0));
     }
   } else {
     AssertTablesEqual(*table, *result);
   }
 }
 
-TEST_P(TestFeather, SliceIntRoundTrip) {
+TEST_P(TestFeather, SliceRoundTrip) {
   std::shared_ptr<RecordBatch> batch;
   ASSERT_OK(ipc::test::MakeIntBatchSized(600, &batch));
   CheckSlices(batch);
 }
 
-TEST_P(TestFeather, SliceFloatRoundTrip) {
-  std::shared_ptr<RecordBatch> batch;
-  // Float16 is not supported by FeatherV1
-  ASSERT_OK(ipc::test::MakeFloat3264BatchSized(600, &batch));
-  CheckSlices(batch);
-}
-
 TEST_P(TestFeather, SliceStringsRoundTrip) {
   std::shared_ptr<RecordBatch> batch;
-  ASSERT_OK(ipc::test::MakeStringTypesRecordBatch(&batch, /*with_nulls=*/true,
-                                                  /*with_view_types=*/false));
+  ASSERT_OK(ipc::test::MakeStringTypesRecordBatch(&batch, /*with_nulls=*/true));
   CheckSlices(batch);
 }
 
@@ -324,46 +293,6 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(TestParam(kFeatherV1Version), TestParam(kFeatherV2Version),
                       TestParam(kFeatherV2Version, Compression::LZ4_FRAME),
                       TestParam(kFeatherV2Version, Compression::ZSTD)));
-
-namespace {
-
-const std::vector<test::MakeRecordBatch*> kBatchCases = {
-    &ipc::test::MakeIntRecordBatch,
-    &ipc::test::MakeListRecordBatch,
-    &ipc::test::MakeListViewRecordBatch,
-    &ipc::test::MakeFixedSizeListRecordBatch,
-    &ipc::test::MakeNonNullRecordBatch,
-    &ipc::test::MakeDeeplyNestedList,
-    &ipc::test::MakeDeeplyNestedListView,
-    &ipc::test::MakeStringTypesRecordBatchWithNulls,
-    &ipc::test::MakeStruct,
-    &ipc::test::MakeUnion,
-    &ipc::test::MakeDictionary,
-    &ipc::test::MakeNestedDictionary,
-    &ipc::test::MakeMap,
-    &ipc::test::MakeMapOfDictionary,
-    &ipc::test::MakeDates,
-    &ipc::test::MakeTimestamps,
-    &ipc::test::MakeTimes,
-    &ipc::test::MakeFWBinary,
-    &ipc::test::MakeNull,
-    &ipc::test::MakeDecimal,
-    &ipc::test::MakeBooleanBatch,
-    &ipc::test::MakeFloatBatch,
-    &ipc::test::MakeIntervals,
-    &ipc::test::MakeRunEndEncoded};
-
-}  // namespace
-
-TEST_P(TestFeatherRoundTrip, RoundTrip) {
-  std::shared_ptr<RecordBatch> batch;
-  ASSERT_OK((*GetParam())(&batch));  // NOLINT clang-tidy gtest issue
-
-  CheckRoundtrip(batch);
-}
-
-INSTANTIATE_TEST_SUITE_P(FeatherRoundTripTests, TestFeatherRoundTrip,
-                         ::testing::ValuesIn(kBatchCases));
 
 }  // namespace feather
 }  // namespace ipc

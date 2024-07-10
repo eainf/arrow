@@ -76,7 +76,7 @@ void DecimalIR::AddGlobals(Engine* engine) {
   auto globalScaleMultipliers = new llvm::GlobalVariable(
       *engine->module(), array_type, true /*constant*/,
       llvm::GlobalValue::LinkOnceAnyLinkage, initializer, kScaleMultipliersName);
-  globalScaleMultipliers->setAlignment(LLVM_ALIGN(16));
+  globalScaleMultipliers->setAlignment(16);
 }
 
 // Lookup intrinsic functions
@@ -96,9 +96,8 @@ void DecimalIR::InitializeIntrinsics() {
 // CPP:  return kScaleMultipliers[scale]
 llvm::Value* DecimalIR::GetScaleMultiplier(llvm::Value* scale) {
   auto const_array = module()->getGlobalVariable(kScaleMultipliersName);
-  auto ptr = ir_builder()->CreateGEP(const_array->getValueType(), const_array,
-                                     {types()->i32_constant(0), scale});
-  return ir_builder()->CreateLoad(types()->i128_type(), ptr);
+  auto ptr = ir_builder()->CreateGEP(const_array, {types()->i32_constant(0), scale});
+  return ir_builder()->CreateLoad(ptr);
 }
 
 // CPP:  x <= y ? y : x
@@ -249,8 +248,8 @@ llvm::Value* DecimalIR::AddLarge(const ValueFull& x, const ValueFull& y,
   ir_builder()->CreateCall(module()->getFunction("add_large_decimal128_decimal128"),
                            args);
 
-  auto out_high = ir_builder()->CreateLoad(types()->i64_type(), out_high_ptr);
-  auto out_low = ir_builder()->CreateLoad(types()->i64_type(), out_low_ptr);
+  auto out_high = ir_builder()->CreateLoad(out_high_ptr);
+  auto out_low = ir_builder()->CreateLoad(out_low_ptr);
   auto sum = ValueSplit(out_high, out_low).AsInt128(this);
   ADD_TRACE_128("AddLarge : sum", sum);
   return sum;
@@ -446,8 +445,8 @@ llvm::Value* DecimalIR::CallDecimalFunction(const std::string& function_name,
     // Make call to pre-compiled IR function.
     ir_builder()->CreateCall(module()->getFunction(function_name), dis_assembled_args);
 
-    auto out_high = ir_builder()->CreateLoad(i64, out_high_ptr);
-    auto out_low = ir_builder()->CreateLoad(i64, out_low_ptr);
+    auto out_high = ir_builder()->CreateLoad(out_high_ptr);
+    auto out_low = ir_builder()->CreateLoad(out_low_ptr);
     result = ValueSplit(out_high, out_low).AsInt128(this);
   } else {
     DCHECK_NE(return_type, types()->void_type());

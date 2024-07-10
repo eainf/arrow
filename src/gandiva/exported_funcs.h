@@ -17,9 +17,8 @@
 
 #pragma once
 
+#include <gandiva/exported_funcs_registry.h>
 #include <vector>
-#include "gandiva/function_registry.h"
-#include "gandiva/visibility.h"
 
 namespace gandiva {
 
@@ -30,49 +29,31 @@ class ExportedFuncsBase {
  public:
   virtual ~ExportedFuncsBase() = default;
 
-  virtual arrow::Status AddMappings(Engine* engine) const = 0;
+  virtual void AddMappings(Engine* engine) const = 0;
 };
 
 // Class for exporting Stub functions
 class ExportedStubFunctions : public ExportedFuncsBase {
-  arrow::Status AddMappings(Engine* engine) const override;
+  void AddMappings(Engine* engine) const override;
 };
+REGISTER_EXPORTED_FUNCS(ExportedStubFunctions);
 
 // Class for exporting Context functions
 class ExportedContextFunctions : public ExportedFuncsBase {
-  arrow::Status AddMappings(Engine* engine) const override;
+  void AddMappings(Engine* engine) const override;
 };
+REGISTER_EXPORTED_FUNCS(ExportedContextFunctions);
 
 // Class for exporting Time functions
 class ExportedTimeFunctions : public ExportedFuncsBase {
-  arrow::Status AddMappings(Engine* engine) const override;
+  void AddMappings(Engine* engine) const override;
 };
+REGISTER_EXPORTED_FUNCS(ExportedTimeFunctions);
 
 // Class for exporting Decimal functions
 class ExportedDecimalFunctions : public ExportedFuncsBase {
-  arrow::Status AddMappings(Engine* engine) const override;
+  void AddMappings(Engine* engine) const override;
 };
+REGISTER_EXPORTED_FUNCS(ExportedDecimalFunctions);
 
-// Class for exporting String functions
-class ExportedStringFunctions : public ExportedFuncsBase {
-  arrow::Status AddMappings(Engine* engine) const override;
-};
-
-// Class for exporting Hash functions
-class ExportedHashFunctions : public ExportedFuncsBase {
-  arrow::Status AddMappings(Engine* engine) const override;
-};
-
-class ExternalCFunctions : public ExportedFuncsBase {
- public:
-  explicit ExternalCFunctions(std::shared_ptr<FunctionRegistry> function_registry)
-      : function_registry_(std::move(function_registry)) {}
-
-  arrow::Status AddMappings(Engine* engine) const override;
-
- private:
-  std::shared_ptr<FunctionRegistry> function_registry_;
-};
-
-GANDIVA_EXPORT void RegisterExportedFuncs();
 }  // namespace gandiva

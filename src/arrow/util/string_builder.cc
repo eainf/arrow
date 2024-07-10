@@ -17,16 +17,19 @@
 
 #include "arrow/util/string_builder.h"
 
-#include <memory>
 #include <sstream>
 
+#include "arrow/util/make_unique.h"
+
 namespace arrow {
+
+using internal::make_unique;
 
 namespace util {
 namespace detail {
 
 StringStreamWrapper::StringStreamWrapper()
-    : sstream_(std::make_unique<std::ostringstream>()), ostream_(*sstream_) {}
+    : sstream_(make_unique<std::ostringstream>()), ostream_(*sstream_) {}
 
 StringStreamWrapper::~StringStreamWrapper() {}
 

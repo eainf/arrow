@@ -17,12 +17,9 @@
 
 #include <sstream>
 
-#include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
 
 #include "arrow/status.h"
-#include "arrow/testing/gtest_util.h"
-#include "arrow/testing/matchers.h"
 
 namespace arrow {
 
@@ -72,10 +69,6 @@ TEST(StatusTest, TestWithDetail) {
   ASSERT_EQ(new_status.detail(), detail);
 }
 
-TEST(StatusTest, TestCoverageWarnNotOK) {
-  ARROW_WARN_NOT_OK(Status::Invalid("invalid"), "Expected warning");
-}
-
 TEST(StatusTest, AndStatus) {
   Status a = Status::OK();
   Status b = Status::OK();
@@ -119,84 +112,6 @@ TEST(StatusTest, TestEquality) {
 
   ASSERT_NE(Status::Invalid("error"), Status::OK());
   ASSERT_NE(Status::Invalid("error"), Status::Invalid("other error"));
-}
-
-TEST(StatusTest, MatcherExamples) {
-  EXPECT_THAT(Status::Invalid("arbitrary error"), Raises(StatusCode::Invalid));
-
-  EXPECT_THAT(Status::Invalid("arbitrary error"),
-              Raises(StatusCode::Invalid, testing::HasSubstr("arbitrary")));
-
-  // message doesn't match, so no match
-  EXPECT_THAT(
-      Status::Invalid("arbitrary error"),
-      testing::Not(Raises(StatusCode::Invalid, testing::HasSubstr("reasonable"))));
-
-  // different error code, so no match
-  EXPECT_THAT(Status::TypeError("arbitrary error"),
-              testing::Not(Raises(StatusCode::Invalid)));
-
-  // not an error, so no match
-  EXPECT_THAT(Status::OK(), testing::Not(Raises(StatusCode::Invalid)));
-}
-
-TEST(StatusTest, MatcherDescriptions) {
-  testing::Matcher<Status> matcher = Raises(StatusCode::Invalid);
-
-  {
-    std::stringstream ss;
-    matcher.DescribeTo(&ss);
-    EXPECT_THAT(ss.str(), testing::StrEq("raises StatusCode::Invalid"));
-  }
-
-  {
-    std::stringstream ss;
-    matcher.DescribeNegationTo(&ss);
-    EXPECT_THAT(ss.str(), testing::StrEq("does not raise StatusCode::Invalid"));
-  }
-}
-
-TEST(StatusTest, MessageMatcherDescriptions) {
-  testing::Matcher<Status> matcher =
-      Raises(StatusCode::Invalid, testing::HasSubstr("arbitrary"));
-
-  {
-    std::stringstream ss;
-    matcher.DescribeTo(&ss);
-    EXPECT_THAT(
-        ss.str(),
-        testing::StrEq(
-            "raises StatusCode::Invalid and message has substring \"arbitrary\""));
-  }
-
-  {
-    std::stringstream ss;
-    matcher.DescribeNegationTo(&ss);
-    EXPECT_THAT(ss.str(), testing::StrEq("does not raise StatusCode::Invalid or message "
-                                         "has no substring \"arbitrary\""));
-  }
-}
-
-TEST(StatusTest, MatcherExplanations) {
-  testing::Matcher<Status> matcher = Raises(StatusCode::Invalid);
-
-  {
-    testing::StringMatchResultListener listener;
-    EXPECT_TRUE(matcher.MatchAndExplain(Status::Invalid("XXX"), &listener));
-    EXPECT_THAT(listener.str(), testing::StrEq("whose error matches"));
-  }
-
-  {
-    testing::StringMatchResultListener listener;
-    EXPECT_FALSE(matcher.MatchAndExplain(Status::OK(), &listener));
-    EXPECT_THAT(listener.str(), testing::StrEq("whose non-error doesn't match"));
-  }
-
-  {
-    testing::StringMatchResultListener listener;
-    EXPECT_FALSE(matcher.MatchAndExplain(Status::TypeError("XXX"), &listener));
-    EXPECT_THAT(listener.str(), testing::StrEq("whose error doesn't match"));
-  }
 }
 
 TEST(StatusTest, TestDetailEquality) {

@@ -27,7 +27,7 @@ using arrow::boolean;
 using arrow::float32;
 using arrow::int32;
 
-class ValidationTestProjector : public ::testing::Test {
+class TestProjector : public ::testing::Test {
  public:
   void SetUp() { pool_ = arrow::default_memory_pool(); }
 
@@ -35,7 +35,7 @@ class ValidationTestProjector : public ::testing::Test {
   arrow::MemoryPool* pool_;
 };
 
-TEST_F(ValidationTestProjector, TestNonexistentFunction) {
+TEST_F(TestProjector, TestNonexistentFunction) {
   // schema for input fields
   auto field0 = field("f0", float32());
   auto field1 = field("f2", float32());
@@ -57,7 +57,7 @@ TEST_F(ValidationTestProjector, TestNonexistentFunction) {
   EXPECT_TRUE(status.message().find(expected_error) != std::string::npos);
 }
 
-TEST_F(ValidationTestProjector, TestNotMatchingDataType) {
+TEST_F(TestProjector, TestNotMatchingDataType) {
   // schema for input fields
   auto field0 = field("f0", float32());
   auto schema = arrow::schema({field0});
@@ -78,7 +78,7 @@ TEST_F(ValidationTestProjector, TestNotMatchingDataType) {
   EXPECT_TRUE(status.message().find(expected_error) != std::string::npos);
 }
 
-TEST_F(ValidationTestProjector, TestNotSupportedDataType) {
+TEST_F(TestProjector, TestNotSupportedDataType) {
   // schema for input fields
   auto field0 = field("f0", list(int32()));
   auto schema = arrow::schema({field0});
@@ -98,7 +98,7 @@ TEST_F(ValidationTestProjector, TestNotSupportedDataType) {
   EXPECT_TRUE(status.message().find(expected_error) != std::string::npos);
 }
 
-TEST_F(ValidationTestProjector, TestIncorrectSchemaMissingField) {
+TEST_F(TestProjector, TestIncorrectSchemaMissingField) {
   // schema for input fields
   auto field0 = field("f0", float32());
   auto field1 = field("f2", float32());
@@ -119,7 +119,7 @@ TEST_F(ValidationTestProjector, TestIncorrectSchemaMissingField) {
   EXPECT_TRUE(status.message().find(expected_error) != std::string::npos);
 }
 
-TEST_F(ValidationTestProjector, TestIncorrectSchemaTypeNotMatching) {
+TEST_F(TestProjector, TestIncorrectSchemaTypeNotMatching) {
   // schema for input fields
   auto field0 = field("f0", float32());
   auto field1 = field("f2", float32());
@@ -142,7 +142,7 @@ TEST_F(ValidationTestProjector, TestIncorrectSchemaTypeNotMatching) {
   EXPECT_TRUE(status.message().find(expected_error) != std::string::npos);
 }
 
-TEST_F(ValidationTestProjector, TestIfNotSupportedFunction) {
+TEST_F(TestProjector, TestIfNotSupportedFunction) {
   // schema for input fields
   auto fielda = field("a", int32());
   auto fieldb = field("b", int32());
@@ -170,7 +170,7 @@ TEST_F(ValidationTestProjector, TestIfNotSupportedFunction) {
   EXPECT_TRUE(status.IsExpressionValidationError());
 }
 
-TEST_F(ValidationTestProjector, TestIfNotMatchingReturnType) {
+TEST_F(TestProjector, TestIfNotMatchingReturnType) {
   // schema for input fields
   auto fielda = field("a", int32());
   auto fieldb = field("b", int32());
@@ -193,7 +193,7 @@ TEST_F(ValidationTestProjector, TestIfNotMatchingReturnType) {
   EXPECT_TRUE(status.IsExpressionValidationError());
 }
 
-TEST_F(ValidationTestProjector, TestElseNotMatchingReturnType) {
+TEST_F(TestProjector, TestElseNotMatchingReturnType) {
   // schema for input fields
   auto fielda = field("a", int32());
   auto fieldb = field("b", int32());
@@ -218,7 +218,7 @@ TEST_F(ValidationTestProjector, TestElseNotMatchingReturnType) {
   EXPECT_TRUE(status.IsExpressionValidationError());
 }
 
-TEST_F(ValidationTestProjector, TestElseNotSupportedType) {
+TEST_F(TestProjector, TestElseNotSupportedType) {
   // schema for input fields
   auto fielda = field("a", int32());
   auto fieldb = field("b", int32());
@@ -244,7 +244,7 @@ TEST_F(ValidationTestProjector, TestElseNotSupportedType) {
   EXPECT_EQ(status.code(), StatusCode::ExpressionValidationError);
 }
 
-TEST_F(ValidationTestProjector, TestAndMinChildren) {
+TEST_F(TestProjector, TestAndMinChildren) {
   // schema for input fields
   auto fielda = field("a", boolean());
   auto schema = arrow::schema({fielda});
@@ -263,7 +263,7 @@ TEST_F(ValidationTestProjector, TestAndMinChildren) {
   EXPECT_TRUE(status.IsExpressionValidationError());
 }
 
-TEST_F(ValidationTestProjector, TestAndBooleanArgType) {
+TEST_F(TestProjector, TestAndBooleanArgType) {
   // schema for input fields
   auto fielda = field("a", boolean());
   auto fieldb = field("b", int32());

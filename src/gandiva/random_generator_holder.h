@@ -21,7 +21,6 @@
 #include <random>
 
 #include "arrow/status.h"
-#include "arrow/util/io_util.h"
 
 #include "gandiva/function_holder.h"
 #include "gandiva/node.h"
@@ -34,7 +33,8 @@ class GANDIVA_EXPORT RandomGeneratorHolder : public FunctionHolder {
  public:
   ~RandomGeneratorHolder() override = default;
 
-  static Result<std::shared_ptr<RandomGeneratorHolder>> Make(const FunctionNode& node);
+  static Status Make(const FunctionNode& node,
+                     std::shared_ptr<RandomGeneratorHolder>* holder);
 
   double operator()() { return distribution_(generator_); }
 
@@ -46,7 +46,8 @@ class GANDIVA_EXPORT RandomGeneratorHolder : public FunctionHolder {
   }
 
   RandomGeneratorHolder() : distribution_(0, 1) {
-    generator_.seed(::arrow::internal::GetRandomSeed());
+    std::random_device rd;
+    generator_.seed(rd());
   }
 
   std::mt19937_64 generator_;

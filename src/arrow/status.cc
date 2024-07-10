@@ -68,9 +68,6 @@ std::string Status::CodeAsString(StatusCode code) {
     case StatusCode::Invalid:
       type = "Invalid";
       break;
-    case StatusCode::Cancelled:
-      type = "Cancelled";
-      break;
     case StatusCode::IOError:
       type = "IOError";
       break;
@@ -120,24 +117,6 @@ std::string Status::ToString() const {
   return result;
 }
 
-std::string Status::ToStringWithoutContextLines() const {
-  auto message = ToString();
-#ifdef ARROW_EXTRA_ERROR_CONTEXT
-  while (true) {
-    auto last_new_line_position = message.rfind("\n");
-    if (last_new_line_position == std::string::npos) {
-      break;
-    }
-    // TODO: We may want to check /:\d+ /
-    if (message.find(":", last_new_line_position) == std::string::npos) {
-      break;
-    }
-    message = message.substr(0, last_new_line_position);
-  }
-#endif
-  return message;
-}
-
 void Status::Abort() const { Abort(std::string()); }
 
 void Status::Abort(const std::string& message) const {
@@ -149,17 +128,11 @@ void Status::Abort(const std::string& message) const {
   std::abort();
 }
 
-void Status::Warn() const { ARROW_LOG(WARNING) << ToString(); }
-
-void Status::Warn(const std::string& message) const {
-  ARROW_LOG(WARNING) << message << ": " << ToString();
-}
-
 #ifdef ARROW_EXTRA_ERROR_CONTEXT
 void Status::AddContextLine(const char* filename, int line, const char* expr) {
   ARROW_CHECK(!ok()) << "Cannot add context line to ok status";
   std::stringstream ss;
-  ss << "\n" << filename << ":" << line << "  " << expr;
+  ss << "\nIn " << filename << ", line " << line << ", code: " << expr;
   state_->msg += ss.str();
 }
 #endif

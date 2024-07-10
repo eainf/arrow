@@ -20,16 +20,10 @@
 #include <cstdint>
 #include <vector>
 
-#include "arrow/array/array_base.h"
-#include "arrow/testing/gtest_util.h"
-#include "arrow/testing/random.h"
-#include "arrow/util/benchmark_util.h"
 #include "arrow/util/int_util.h"
 
 namespace arrow {
 namespace internal {
-
-constexpr auto kSeed = 0x94378165;
 
 std::vector<uint64_t> GetUIntSequence(int n_values, uint64_t addend = 0) {
   std::vector<uint64_t> values(n_values);
@@ -64,7 +58,6 @@ static void DetectUIntWidthNoNulls(
     benchmark::DoNotOptimize(result);
   }
   state.SetBytesProcessed(state.iterations() * values.size() * sizeof(uint64_t));
-  state.SetItemsProcessed(state.iterations() * values.size());
 }
 
 static void DetectUIntWidthNulls(benchmark::State& state) {  // NOLINT non-const reference
@@ -77,7 +70,6 @@ static void DetectUIntWidthNulls(benchmark::State& state) {  // NOLINT non-const
     benchmark::DoNotOptimize(result);
   }
   state.SetBytesProcessed(state.iterations() * values.size() * sizeof(uint64_t));
-  state.SetItemsProcessed(state.iterations() * values.size());
 }
 
 static void DetectIntWidthNoNulls(
@@ -89,7 +81,6 @@ static void DetectIntWidthNoNulls(
     benchmark::DoNotOptimize(result);
   }
   state.SetBytesProcessed(state.iterations() * values.size() * sizeof(uint64_t));
-  state.SetItemsProcessed(state.iterations() * values.size());
 }
 
 static void DetectIntWidthNulls(benchmark::State& state) {  // NOLINT non-const reference
@@ -102,46 +93,12 @@ static void DetectIntWidthNulls(benchmark::State& state) {  // NOLINT non-const 
     benchmark::DoNotOptimize(result);
   }
   state.SetBytesProcessed(state.iterations() * values.size() * sizeof(uint64_t));
-  state.SetItemsProcessed(state.iterations() * values.size());
-}
-
-static void CheckIndexBoundsInt32(
-    benchmark::State& state) {  // NOLINT non-const reference
-  GenericItemsArgs args(state);
-  random::RandomArrayGenerator rand(kSeed);
-  auto arr = rand.Int32(args.size, 0, 100000, args.null_proportion);
-  for (auto _ : state) {
-    ABORT_NOT_OK(CheckIndexBounds(*arr->data(), 100001));
-  }
-}
-
-static void CheckIndexBoundsUInt32(
-    benchmark::State& state) {  // NOLINT non-const reference
-  GenericItemsArgs args(state);
-  random::RandomArrayGenerator rand(kSeed);
-  auto arr = rand.UInt32(args.size, 0, 100000, args.null_proportion);
-  for (auto _ : state) {
-    ABORT_NOT_OK(CheckIndexBounds(*arr->data(), 100001));
-  }
 }
 
 BENCHMARK(DetectUIntWidthNoNulls);
 BENCHMARK(DetectUIntWidthNulls);
 BENCHMARK(DetectIntWidthNoNulls);
 BENCHMARK(DetectIntWidthNulls);
-
-std::vector<int64_t> g_data_sizes = {kL1Size, kL2Size};
-
-void BoundsCheckSetArgs(benchmark::internal::Benchmark* bench) {
-  for (int64_t size : g_data_sizes) {
-    for (auto nulls : std::vector<ArgsType>({1000, 10, 2, 1, 0})) {
-      bench->Args({static_cast<ArgsType>(size), nulls});
-    }
-  }
-}
-
-BENCHMARK(CheckIndexBoundsInt32)->Apply(BoundsCheckSetArgs);
-BENCHMARK(CheckIndexBoundsUInt32)->Apply(BoundsCheckSetArgs);
 
 }  // namespace internal
 }  // namespace arrow

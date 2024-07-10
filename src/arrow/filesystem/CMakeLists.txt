@@ -25,88 +25,20 @@ add_arrow_test(filesystem-test
                SOURCES
                filesystem_test.cc
                localfs_test.cc
-               EXTRA_LABELS
-               filesystem
-               DEFINITIONS
-               ARROW_FILESYSTEM_EXAMPLE_LIBPATH="$<TARGET_FILE:arrow_filesystem_example>")
-
-if(ARROW_BUILD_BENCHMARKS)
-  add_arrow_benchmark(localfs_benchmark
-                      PREFIX
-                      "arrow-filesystem"
-                      SOURCES
-                      localfs_benchmark.cc
-                      STATIC_LINK_LIBS
-                      ${ARROW_BENCHMARK_LINK_LIBS})
-endif()
-
-if(ARROW_GCS)
-  add_arrow_test(gcsfs_test
-                 EXTRA_LABELS
-                 filesystem
-                 EXTRA_LINK_LIBS
-                 google-cloud-cpp::storage
-                 Boost::filesystem
-                 Boost::system)
-endif()
-
-if(ARROW_AZURE)
-  add_arrow_test(azurefs_test
-                 EXTRA_LABELS
-                 filesystem
-                 EXTRA_LINK_LIBS
-                 ${AZURE_SDK_LINK_LIBRARIES}
-                 Boost::filesystem
-                 Boost::system)
-endif()
+               path_forest_test.cc)
 
 if(ARROW_S3)
-  add_arrow_test(s3fs_test
-                 SOURCES
-                 s3fs_test.cc
-                 s3_test_util.cc
-                 EXTRA_LABELS
-                 filesystem
-                 EXTRA_LINK_LIBS
-                 ${AWSSDK_LINK_LIBRARIES}
-                 Boost::filesystem
-                 Boost::system)
-  if(TARGET arrow-s3fs-test)
-    set(ARROW_S3FS_TEST_COMPILE_DEFINITIONS)
-    get_target_property(AWS_CPP_SDK_S3_TYPE aws-cpp-sdk-s3 TYPE)
-    # We need to initialize AWS C++ SDK for direct use (not via
-    # arrow::fs::S3FileSystem) in arrow-s3fs-test if we use static AWS
-    # C++ SDK and hide symbols of them. Because AWS C++ SDK has
-    # internal static variables that aren't shared in libarrow and
-    # arrow-s3fs-test. It means that arrow::fs::InitializeS3() doesn't
-    # initialize AWS C++ SDK that is directly used in arrow-s3fs-test.
-    if(AWS_CPP_SDK_S3_TYPE STREQUAL "STATIC_LIBRARY"
-       AND CXX_LINKER_SUPPORTS_VERSION_SCRIPT)
-      list(APPEND ARROW_S3FS_TEST_COMPILE_DEFINITIONS "AWS_CPP_SDK_S3_PRIVATE_STATIC")
-    endif()
-    target_compile_definitions(arrow-s3fs-test
-                               PRIVATE ${ARROW_S3FS_TEST_COMPILE_DEFINITIONS})
-  endif()
+  add_arrow_test(s3fs_test)
 
   if(ARROW_BUILD_TESTS)
     add_executable(arrow-s3fs-narrative-test s3fs_narrative_test.cc)
     target_link_libraries(arrow-s3fs-narrative-test ${ARROW_TEST_LINK_LIBS}
-                          ${GFLAGS_LIBRARIES})
+                          ${GFLAGS_LIBRARIES} GTest::gtest)
     add_dependencies(arrow-tests arrow-s3fs-narrative-test)
   endif()
 
   if(ARROW_BUILD_BENCHMARKS AND ARROW_PARQUET)
-    add_arrow_benchmark(s3fs_benchmark
-                        PREFIX
-                        "arrow-filesystem"
-                        SOURCES
-                        s3fs_benchmark.cc
-                        s3_test_util.cc
-                        STATIC_LINK_LIBS
-                        ${AWSSDK_LINK_LIBRARIES}
-                        ${ARROW_BENCHMARK_LINK_LIBS}
-                        Boost::filesystem
-                        Boost::system)
+    add_arrow_benchmark(s3fs_benchmark PREFIX "arrow-filesystem")
     if(ARROW_TEST_LINKAGE STREQUAL "static")
       target_link_libraries(arrow-filesystem-s3fs-benchmark PRIVATE parquet_static)
     else()
@@ -116,5 +48,5 @@ if(ARROW_S3)
 endif()
 
 if(ARROW_HDFS)
-  add_arrow_test(hdfs_test EXTRA_LABELS filesystem)
+  add_arrow_test(hdfs_test)
 endif()

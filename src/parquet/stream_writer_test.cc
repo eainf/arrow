@@ -23,8 +23,7 @@
 #include <memory>
 #include <utility>
 
-#include "arrow/io/file.h"
-#include "arrow/io/memory.h"
+#include "arrow/io/api.h"
 #include "parquet/exception.h"
 
 namespace parquet {
@@ -298,8 +297,7 @@ TEST_F(TestStreamWriter, SkipColumns) {
 }
 
 TEST_F(TestStreamWriter, AppendNotImplemented) {
-  PARQUET_ASSIGN_OR_THROW(auto outfile,
-                          ::arrow::io::FileOutputStream::Open(GetDataFile()));
+  PARQUET_ASSIGN_OR_THROW(auto outfile, arrow::io::FileOutputStream::Open(GetDataFile()));
 
   writer_ = StreamWriter{ParquetFileWriter::Open(outfile, GetSchema())};
   writer_ << false << std::string("Just one row") << 'x'
@@ -310,7 +308,7 @@ TEST_F(TestStreamWriter, AppendNotImplemented) {
 
   // Re-open file in append mode.
   PARQUET_ASSIGN_OR_THROW(outfile,
-                          ::arrow::io::FileOutputStream::Open(GetDataFile(), true));
+                          arrow::io::FileOutputStream::Open(GetDataFile(), true));
 
   EXPECT_THROW(ParquetFileWriter::Open(outfile, GetSchema()), ParquetException);
 }  // namespace test

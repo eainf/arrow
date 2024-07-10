@@ -20,7 +20,6 @@
 #include <string>
 
 #include "arrow/util/decimal.h"
-#include "arrow/util/io_util.h"
 
 #pragma once
 
@@ -36,13 +35,18 @@ class DataGenerator {
 
 class Random {
  public:
-  Random() : gen_(::arrow::internal::GetRandomSeed()) {}
-  explicit Random(uint64_t seed) : gen_(seed) {}
+  explicit Random(uint32_t seed = 100) : seed_(seed) {}
 
-  int32_t next() { return gen_(); }
+  // This is 3 times faster than random_device
+#ifndef _MSC_VER
+  int32_t next() { return rand_r(&seed_); }
+#else
+  int32_t next() { return random_dev_(); }
+#endif
 
  private:
-  std::default_random_engine gen_;
+  uint32_t seed_;
+  std::random_device random_dev_;
 };
 
 class Int32DataGenerator : public DataGenerator<int32_t> {
@@ -123,30 +127,6 @@ class FastUtf8DataGenerator : public DataGenerator<std::string> {
   Random random_;
   unsigned int max_len_;
   char cur_char_;
-};
-
-class Utf8IntDataGenerator : public DataGenerator<std::string> {
- public:
-  Utf8IntDataGenerator() {}
-
-  std::string GenerateData() { return std::to_string(random_.next()); }
-
- private:
-  Random random_;
-};
-
-class Utf8FloatDataGenerator : public DataGenerator<std::string> {
- public:
-  Utf8FloatDataGenerator() {}
-
-  std::string GenerateData() {
-    return std::to_string(
-        static_cast<float>(random_.next()) /
-        static_cast<float>(RAND_MAX / 100));  // random float between 0.0 to 100.0
-  }
-
- private:
-  Random random_;
 };
 
 }  // namespace gandiva

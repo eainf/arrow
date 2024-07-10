@@ -30,7 +30,6 @@
 
 #include "parquet/platform.h"
 #include "parquet/types.h"
-#include "parquet/windows_fixup.h"  // for OPTIONAL
 
 namespace parquet {
 
@@ -128,6 +127,9 @@ class PARQUET_EXPORT Node {
   /// Thrift.
   int field_id() const { return field_id_; }
 
+  PARQUET_DEPRECATED("id() is deprecated. Use field_id() instead")
+  int id() const { return field_id_; }
+
   const Node* parent() const { return parent_; }
 
   const std::shared_ptr<ColumnPath> path() const;
@@ -189,8 +191,8 @@ class PARQUET_EXPORT Node {
 };
 
 // Save our breath all over the place with these typedefs
-using NodePtr = std::shared_ptr<Node>;
-using NodeVector = std::vector<NodePtr>;
+typedef std::shared_ptr<Node> NodePtr;
+typedef std::vector<NodePtr> NodeVector;
 
 // A type that is one of the primitive Parquet storage types. In addition to
 // the other type metadata (name, repetition level, logical type), also has the
@@ -198,7 +200,8 @@ using NodeVector = std::vector<NodePtr>;
 // parameters)
 class PARQUET_EXPORT PrimitiveNode : public Node {
  public:
-  static std::unique_ptr<Node> FromParquet(const void* opaque_element);
+  // The field_id here is the default to use if it is not set in the SchemaElement
+  static std::unique_ptr<Node> FromParquet(const void* opaque_element, int field_id = -1);
 
   // A field_id -1 (or any negative value) will be serialized as null in Thrift
   static inline NodePtr Make(const std::string& name, Repetition::type repetition,
@@ -216,8 +219,8 @@ class PARQUET_EXPORT PrimitiveNode : public Node {
                              std::shared_ptr<const LogicalType> logical_type,
                              Type::type primitive_type, int primitive_length = -1,
                              int field_id = -1) {
-    return NodePtr(new PrimitiveNode(name, repetition, std::move(logical_type),
-                                     primitive_type, primitive_length, field_id));
+    return NodePtr(new PrimitiveNode(name, repetition, logical_type, primitive_type,
+                                     primitive_length, field_id));
   }
 
   bool Equals(const Node* other) const override;
@@ -263,8 +266,9 @@ class PARQUET_EXPORT PrimitiveNode : public Node {
 
 class PARQUET_EXPORT GroupNode : public Node {
  public:
+  // The field_id here is the default to use if it is not set in the SchemaElement
   static std::unique_ptr<Node> FromParquet(const void* opaque_element,
-                                           NodeVector fields = {});
+                                           NodeVector fields = {}, int field_id = -1);
 
   // A field_id -1 (or any negative value) will be serialized as null in Thrift
   static inline NodePtr Make(const std::string& name, Repetition::type repetition,
@@ -285,7 +289,7 @@ class PARQUET_EXPORT GroupNode : public Node {
 
   bool Equals(const Node* other) const override;
 
-  const NodePtr& field(int i) const { return fields_[i]; }
+  NodePtr field(int i) const { return fields_[i]; }
   // Get the index of a field by its name, or negative value if not found.
   // If several fields share the same name, it is unspecified which one
   // is returned.
@@ -432,7 +436,7 @@ class PARQUET_EXPORT SchemaDescriptor {
   // Get the index of a column by its node, or negative value if not found.
   int ColumnIndex(const schema::Node& node) const;
 
-  bool Equals(const SchemaDescriptor& other, std::ostream* diff_output = NULLPTR) const;
+  bool Equals(const SchemaDescriptor& other) const;
 
   // The number of physical columns appearing in the file
   int num_columns() const { return static_cast<int>(leaves_.size()); }

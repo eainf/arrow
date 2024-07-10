@@ -20,22 +20,19 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "arrow/array.h"
-#include "arrow/array/builder_base.h"
-#include "arrow/array/builder_binary.h"
-#include "arrow/array/builder_nested.h"
-#include "arrow/array/builder_primitive.h"
-#include "arrow/chunked_array.h"
+#include "arrow/builder.h"
 #include "arrow/compute/api.h"
+#include "arrow/memory_pool.h"
 #include "arrow/status.h"
 #include "arrow/table.h"
-#include "arrow/type_fwd.h"
+#include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/macros.h"
@@ -342,15 +339,16 @@ struct RowIterator<Tuple, 0> {
 template <typename Tuple, std::size_t N = std::tuple_size<Tuple>::value>
 struct EnsureColumnTypes {
   static Status Cast(const Table& table, std::shared_ptr<Table>* table_owner,
-                     const compute::CastOptions& cast_options, compute::ExecContext* ctx,
+                     const compute::CastOptions& cast_options,
+                     compute::FunctionContext* ctx,
                      std::reference_wrapper<const ::arrow::Table>* result) {
     using Element = BareTupleElement<N - 1, Tuple>;
     std::shared_ptr<DataType> expected_type = ConversionTraits<Element>::type_singleton();
 
     if (!table.schema()->field(N - 1)->type()->Equals(*expected_type)) {
-      ARROW_ASSIGN_OR_RAISE(
-          Datum casted,
-          compute::Cast(table.column(N - 1), expected_type, cast_options, ctx));
+      compute::Datum casted;
+      ARROW_RETURN_NOT_OK(compute::Cast(ctx, compute::Datum(table.column(N - 1)),
+                                        expected_type, cast_options, &casted));
       auto new_field = table.schema()->field(N - 1)->WithType(expected_type);
       ARROW_ASSIGN_OR_RAISE(*table_owner,
                             table.SetColumn(N - 1, new_field, casted.chunked_array()));
@@ -365,7 +363,8 @@ struct EnsureColumnTypes {
 template <typename Tuple>
 struct EnsureColumnTypes<Tuple, 0> {
   static Status Cast(const Table& table, std::shared_ptr<Table>* table_owner,
-                     const compute::CastOptions& cast_options, compute::ExecContext* ctx,
+                     const compute::CastOptions& cast_options,
+                     compute::FunctionContext* ctx,
                      std::reference_wrapper<const ::arrow::Table>* result) {
     return Status::OK();
   }
@@ -423,27 +422,30 @@ Status TableFromTupleRange(MemoryPool* pool, Range&& rows,
     arrays.emplace_back(array);
   }
 
-  *table = Table::Make(std::move(schema), std::move(arrays));
+  *table = Table::Make(schema, arrays);
 
   return Status::OK();
 }
 
 template <typename Range>
 Status TupleRangeFromTable(const Table& table, const compute::CastOptions& cast_options,
-                           compute::ExecContext* ctx, Range* rows) {
+                           compute::FunctionContext* ctx, Range* rows) {
   using row_type = typename std::decay<decltype(*std::begin(*rows))>::type;
   constexpr std::size_t n_columns = std::tuple_size<row_type>::value;
 
   if (table.schema()->num_fields() != n_columns) {
-    return Status::Invalid(
-        "Number of columns in the table does not match the width of the target: ",
-        table.schema()->num_fields(), " != ", n_columns);
+    std::stringstream ss;
+    ss << "Number of columns in the table does not match the width of the target: ";
+    ss << table.schema()->num_fields() << " != " << n_columns;
+    return Status::Invalid(ss.str());
   }
 
-  if (std::size(*rows) != static_cast<size_t>(table.num_rows())) {
-    return Status::Invalid(
-        "Number of rows in the table does not match the size of the target: ",
-        table.num_rows(), " != ", std::size(*rows));
+  // TODO: Use std::size with C++17
+  if (rows->size() != static_cast<size_t>(table.num_rows())) {
+    std::stringstream ss;
+    ss << "Number of rows in the table does not match the size of the target: ";
+    ss << table.num_rows() << " != " << rows->size();
+    return Status::Invalid(ss.str());
   }
 
   // Check that all columns have the correct type, otherwise cast them.

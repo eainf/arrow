@@ -28,6 +28,8 @@
 
 #include <gtest/gtest.h>
 
+#include <boost/filesystem.hpp>  // NOLINT
+
 #include "arrow/buffer.h"
 #include "arrow/io/hdfs.h"
 #include "arrow/io/hdfs_internal.h"
@@ -35,11 +37,6 @@
 #include "arrow/status.h"
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/util.h"
-
-// boost/filesystem.hpp should be included after
-// arrow/util/windows_compatibility.h because boost/filesystem.hpp
-// includes windows.h implicitly.
-#include <boost/filesystem.hpp>  // NOLINT
 
 namespace arrow {
 namespace io {
@@ -139,9 +136,10 @@ class TestHadoopFileSystem : public ::testing::Test {
   std::shared_ptr<HadoopFileSystem> client_;
 };
 
-#define SKIP_IF_NO_DRIVER()                        \
-  if (!this->loaded_driver_) {                     \
-    GTEST_SKIP() << "Driver not loaded, skipping"; \
+#define SKIP_IF_NO_DRIVER()                                  \
+  if (!this->loaded_driver_) {                               \
+    std::cout << "Driver not loaded, skipping" << std::endl; \
+    return;                                                  \
   }
 
 TEST_F(TestHadoopFileSystem, ConnectsAgain) {

@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "arrow/util/key_value_metadata.h"
-#include "arrow/util/string.h"
 
 #include "parquet/column_scanner.h"
 #include "parquet/exception.h"
@@ -38,25 +37,6 @@
 namespace parquet {
 
 class ColumnReader;
-
-namespace {
-
-void PrintPageEncodingStats(std::ostream& stream,
-                            const std::vector<PageEncodingStats>& encoding_stats) {
-  for (size_t i = 0; i < encoding_stats.size(); ++i) {
-    const auto& encoding = encoding_stats.at(i);
-    stream << EncodingToString(encoding.encoding);
-    if (encoding.page_type == parquet::PageType::DICTIONARY_PAGE) {
-      // Explicitly tell if this encoding comes from a dictionary page
-      stream << "(DICT_PAGE)";
-    }
-    if (i + 1 != encoding_stats.size()) {
-      stream << " ";
-    }
-  }
-}
-
-}  // namespace
 
 // ----------------------------------------------------------------------
 // ParquetFilePrinter::DebugPrint
@@ -105,16 +85,12 @@ void ParquetFilePrinter::DebugPrint(std::ostream& stream, std::list<int> selecte
   for (auto i : selected_columns) {
     const ColumnDescriptor* descr = file_metadata->schema()->Column(i);
     stream << "Column " << i << ": " << descr->path()->ToDotString() << " ("
-           << TypeToString(descr->physical_type(), descr->type_length());
-    const auto& logical_type = descr->logical_type();
-    if (!logical_type->is_none()) {
-      stream << " / " << logical_type->ToString();
-    }
+           << TypeToString(descr->physical_type());
     if (descr->converted_type() != ConvertedType::NONE) {
-      stream << " / " << ConvertedTypeToString(descr->converted_type());
-      if (descr->converted_type() == ConvertedType::DECIMAL) {
-        stream << "(" << descr->type_precision() << "," << descr->type_scale() << ")";
-      }
+      stream << "/" << ConvertedTypeToString(descr->converted_type());
+    }
+    if (descr->converted_type() == ConvertedType::DECIMAL) {
+      stream << "(" << descr->type_precision() << "," << descr->type_scale() << ")";
     }
     stream << ")" << std::endl;
   }
@@ -126,8 +102,6 @@ void ParquetFilePrinter::DebugPrint(std::ostream& stream, std::list<int> selecte
     std::unique_ptr<RowGroupMetaData> group_metadata = file_metadata->RowGroup(r);
 
     stream << "--- Total Bytes: " << group_metadata->total_byte_size() << " ---\n";
-    stream << "--- Total Compressed Bytes: " << group_metadata->total_compressed_size()
-           << " ---\n";
     stream << "--- Rows: " << group_metadata->num_rows() << " ---\n";
 
     // Print column metadata
@@ -147,16 +121,10 @@ void ParquetFilePrinter::DebugPrint(std::ostream& stream, std::list<int> selecte
         stream << "  Statistics Not Set";
       }
       stream << std::endl
-             << "  Compression: "
-             << ::arrow::internal::AsciiToUpper(
-                    Codec::GetCodecAsString(column_chunk->compression()))
-             << ", Encodings: ";
-      if (column_chunk->encoding_stats().empty()) {
-        for (auto encoding : column_chunk->encodings()) {
-          stream << EncodingToString(encoding) << " ";
-        }
-      } else {
-        PrintPageEncodingStats(stream, column_chunk->encoding_stats());
+             << "  Compression: " << Codec::GetCodecAsString(column_chunk->compression())
+             << ", Encodings:";
+      for (auto encoding : column_chunk->encodings()) {
+        stream << " " << EncodingToString(encoding);
       }
       stream << std::endl
              << "  Uncompressed Size: " << column_chunk->total_uncompressed_size()
@@ -244,8 +212,7 @@ void ParquetFilePrinter::JSONPrint(std::ostream& stream, std::list<int> selected
   int c = 0;
   for (auto i : selected_columns) {
     const ColumnDescriptor* descr = file_metadata->schema()->Column(i);
-    stream << "     { \"Id\": \"" << i << "\","
-           << " \"Name\": \"" << descr->path()->ToDotString() << "\","
+    stream << "     { \"Id\": \"" << i << "\", \"Name\": \"" << descr->name() << "\","
            << " \"PhysicalType\": \"" << TypeToString(descr->physical_type()) << "\","
            << " \"ConvertedType\": \"" << ConvertedTypeToString(descr->converted_type())
            << "\","
@@ -264,8 +231,6 @@ void ParquetFilePrinter::JSONPrint(std::ostream& stream, std::list<int> selected
     std::unique_ptr<RowGroupMetaData> group_metadata = file_metadata->RowGroup(r);
 
     stream << " \"TotalBytes\": \"" << group_metadata->total_byte_size() << "\", ";
-    stream << " \"TotalCompressedBytes\": \"" << group_metadata->total_compressed_size()
-           << "\", ";
     stream << " \"Rows\": \"" << group_metadata->num_rows() << "\",\n";
 
     // Print column metadata
@@ -281,66 +246,24 @@ void ParquetFilePrinter::JSONPrint(std::ostream& stream, std::list<int> selected
              << "\"StatsSet\": ";
       if (column_chunk->is_stats_set()) {
         stream << "\"True\", \"Stats\": {";
-        if (stats->HasNullCount()) {
-          stream << "\"NumNulls\": \"" << stats->null_count();
-        }
-        if (stats->HasDistinctCount()) {
-          stream << "\", "
-                 << "\"DistinctValues\": \"" << stats->distinct_count();
-        }
-        if (stats->HasMinMax()) {
-          std::string min = stats->EncodeMin(), max = stats->EncodeMax();
-          stream << "\", "
-                 << "\"Max\": \"" << FormatStatValue(descr->physical_type(), max)
-                 << "\", "
-                 << "\"Min\": \"" << FormatStatValue(descr->physical_type(), min);
-        }
-        stream << "\" },";
+        std::string min = stats->EncodeMin(), max = stats->EncodeMax();
+        stream << "\"NumNulls\": \"" << stats->null_count() << "\", "
+               << "\"DistinctValues\": \"" << stats->distinct_count() << "\", "
+               << "\"Max\": \"" << FormatStatValue(descr->physical_type(), max) << "\", "
+               << "\"Min\": \"" << FormatStatValue(descr->physical_type(), min)
+               << "\" },";
       } else {
         stream << "\"False\",";
       }
       stream << "\n           \"Compression\": \""
-             << ::arrow::internal::AsciiToUpper(
-                    Codec::GetCodecAsString(column_chunk->compression()))
+             << Codec::GetCodecAsString(column_chunk->compression())
              << "\", \"Encodings\": \"";
-      if (column_chunk->encoding_stats().empty()) {
-        for (auto encoding : column_chunk->encodings()) {
-          stream << EncodingToString(encoding) << " ";
-        }
-      } else {
-        PrintPageEncodingStats(stream, column_chunk->encoding_stats());
+      for (auto encoding : column_chunk->encodings()) {
+        stream << EncodingToString(encoding) << " ";
       }
       stream << "\", "
              << "\"UncompressedSize\": \"" << column_chunk->total_uncompressed_size()
              << "\", \"CompressedSize\": \"" << column_chunk->total_compressed_size();
-
-      if (column_chunk->bloom_filter_offset()) {
-        // Output BloomFilter {offset, length}
-        stream << "\", BloomFilter {"
-               << "\"offset\": \"" << column_chunk->bloom_filter_offset().value();
-        if (column_chunk->bloom_filter_length()) {
-          stream << "\", \"length\": \"" << column_chunk->bloom_filter_length().value();
-        }
-        stream << "\"}";
-      }
-
-      if (column_chunk->GetColumnIndexLocation()) {
-        auto location = column_chunk->GetColumnIndexLocation().value();
-        // Output ColumnIndex {offset, length}
-        stream << "\", ColumnIndex {"
-               << "\"offset\": \"" << location.offset;
-        stream << "\", \"length\": \"" << location.length;
-        stream << "\"}";
-      }
-
-      if (column_chunk->GetOffsetIndexLocation()) {
-        auto location = column_chunk->GetOffsetIndexLocation().value();
-        // Output OffsetIndex {offset, length}
-        stream << "\", OffsetIndex {"
-               << "\"offset\": \"" << location.offset;
-        stream << "\", \"length\": \"" << location.length;
-        stream << "\"}";
-      }
 
       // end of a ColumnChunk
       stream << "\" }";

@@ -15,41 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <memory>
-
-#include "arrow/type.h"
-#include "arrow/util/checked_cast.h"
 #include "arrow/util/time.h"
+#include "arrow/util/checked_cast.h"
 
 namespace arrow {
 
-using internal::checked_cast;
+using internal::checked_pointer_cast;
 
 namespace util {
-
-// TimestampType -> TimestampType
-static const std::pair<DivideOrMultiply, int64_t> kTimestampConversionTable[4][4] = {
-    // TimestampType::SECOND
-    {{MULTIPLY, 1}, {MULTIPLY, 1000}, {MULTIPLY, 1000000}, {MULTIPLY, 1000000000}},
-    // TimestampType::MILLI
-    {{DIVIDE, 1000}, {MULTIPLY, 1}, {MULTIPLY, 1000}, {MULTIPLY, 1000000}},
-    // TimestampType::MICRO
-    {{DIVIDE, 1000000}, {DIVIDE, 1000}, {MULTIPLY, 1}, {MULTIPLY, 1000}},
-    // TimestampType::NANO
-    {{DIVIDE, 1000000000}, {DIVIDE, 1000000}, {DIVIDE, 1000}, {MULTIPLY, 1}},
-};
-
-std::pair<DivideOrMultiply, int64_t> GetTimestampConversion(TimeUnit::type in_unit,
-                                                            TimeUnit::type out_unit) {
-  return kTimestampConversionTable[static_cast<int>(in_unit)][static_cast<int>(out_unit)];
-}
 
 Result<int64_t> ConvertTimestampValue(const std::shared_ptr<DataType>& in,
                                       const std::shared_ptr<DataType>& out,
                                       int64_t value) {
+  auto from = checked_pointer_cast<TimestampType>(in)->unit();
+  auto to = checked_pointer_cast<TimestampType>(out)->unit();
+
   auto op_factor =
-      GetTimestampConversion(checked_cast<const TimestampType&>(*in).unit(),
-                             checked_cast<const TimestampType&>(*out).unit());
+      util::kTimestampConversionTable[static_cast<int>(from)][static_cast<int>(to)];
 
   auto op = op_factor.first;
   auto factor = op_factor.second;

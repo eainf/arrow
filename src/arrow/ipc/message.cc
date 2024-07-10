@@ -30,12 +30,8 @@
 #include "arrow/io/interfaces.h"
 #include "arrow/ipc/metadata_internal.h"
 #include "arrow/ipc/options.h"
-#include "arrow/ipc/reader.h"
-#include "arrow/ipc/reader_internal.h"
 #include "arrow/ipc/util.h"
 #include "arrow/status.h"
-#include "arrow/util/endian.h"
-#include "arrow/util/future.h"
 #include "arrow/util/logging.h"
 #include "arrow/util/ubsan.h"
 
@@ -62,35 +58,29 @@ class Message::MessageImpl {
       return Status::Invalid("Old metadata version not supported");
     }
 
-    if (message_->version() > flatbuf::MetadataVersion::MAX) {
-      return Status::Invalid("Unsupported future MetadataVersion: ",
-                             static_cast<int16_t>(message_->version()));
-    }
-
     if (message_->custom_metadata() != nullptr) {
       // Deserialize from Flatbuffers if first time called
-      std::shared_ptr<KeyValueMetadata> md;
-      RETURN_NOT_OK(internal::GetKeyValueMetadata(message_->custom_metadata(), &md));
-      custom_metadata_ = std::move(md);  // const-ify
+      RETURN_NOT_OK(
+          internal::GetKeyValueMetadata(message_->custom_metadata(), &custom_metadata_));
     }
 
     return Status::OK();
   }
 
-  MessageType type() const {
+  Message::Type type() const {
     switch (message_->header_type()) {
       case flatbuf::MessageHeader::Schema:
-        return MessageType::SCHEMA;
+        return Message::SCHEMA;
       case flatbuf::MessageHeader::DictionaryBatch:
-        return MessageType::DICTIONARY_BATCH;
+        return Message::DICTIONARY_BATCH;
       case flatbuf::MessageHeader::RecordBatch:
-        return MessageType::RECORD_BATCH;
+        return Message::RECORD_BATCH;
       case flatbuf::MessageHeader::Tensor:
-        return MessageType::TENSOR;
+        return Message::TENSOR;
       case flatbuf::MessageHeader::SparseTensor:
-        return MessageType::SPARSE_TENSOR;
+        return Message::SPARSE_TENSOR;
       default:
-        return MessageType::NONE;
+        return Message::NONE;
     }
   }
 
@@ -141,7 +131,7 @@ int64_t Message::body_length() const { return impl_->body_length(); }
 
 std::shared_ptr<Buffer> Message::metadata() const { return impl_->metadata(); }
 
-MessageType Message::type() const { return impl_->type(); }
+Message::Type Message::type() const { return impl_->type(); }
 
 MetadataVersion Message::metadata_version() const { return impl_->version(); }
 
@@ -186,7 +176,7 @@ Status MaybeAlignMetadata(std::shared_ptr<Buffer>* metadata) {
 }
 
 Status CheckMetadataAndGetBodyLength(const Buffer& metadata, int64_t* body_length) {
-  const flatbuf::Message* fb_message = nullptr;
+  const flatbuf::Message* fb_message;
   RETURN_NOT_OK(internal::VerifyMessage(metadata.data(), metadata.size(), &fb_message));
   *body_length = fb_message->bodyLength();
   if (*body_length < 0) {
@@ -263,101 +253,22 @@ bool Message::Verify() const {
   return internal::VerifyMessage(metadata()->data(), metadata()->size(), &unused).ok();
 }
 
-std::string FormatMessageType(MessageType type) {
+std::string FormatMessageType(Message::Type type) {
   switch (type) {
-    case MessageType::SCHEMA:
+    case Message::SCHEMA:
       return "schema";
-    case MessageType::RECORD_BATCH:
+    case Message::RECORD_BATCH:
       return "record batch";
-    case MessageType::DICTIONARY_BATCH:
+    case Message::DICTIONARY_BATCH:
       return "dictionary";
-    case MessageType::TENSOR:
-      return "tensor";
-    case MessageType::SPARSE_TENSOR:
-      return "sparse tensor";
     default:
       break;
   }
   return "unknown";
 }
 
-Status ReadFieldsSubset(int64_t offset, int32_t metadata_length,
-                        io::RandomAccessFile* file,
-                        const FieldsLoaderFunction& fields_loader,
-                        const std::shared_ptr<Buffer>& metadata, int64_t required_size,
-                        std::shared_ptr<Buffer>& body) {
-  const flatbuf::Message* message = nullptr;
-  uint8_t continuation_metadata_size = sizeof(int32_t) + sizeof(int32_t);
-  // skip 8 bytes (32-bit continuation indicator + 32-bit little-endian length prefix)
-  RETURN_NOT_OK(internal::VerifyMessage(metadata->data() + continuation_metadata_size,
-                                        metadata->size() - continuation_metadata_size,
-                                        &message));
-  auto batch = message->header_as_RecordBatch();
-  if (batch == nullptr) {
-    return Status::IOError(
-        "Header-type of flatbuffer-encoded Message is not RecordBatch.");
-  }
-  internal::IoRecordedRandomAccessFile io_recorded_random_access_file(required_size);
-  RETURN_NOT_OK(fields_loader(batch, &io_recorded_random_access_file));
-  auto const& read_ranges = io_recorded_random_access_file.GetReadRanges();
-  for (auto const& range : read_ranges) {
-    auto read_result = file->ReadAt(offset + metadata_length + range.offset, range.length,
-                                    body->mutable_data() + range.offset);
-    if (!read_result.ok()) {
-      return Status::IOError("Failed to read message body, error ",
-                             read_result.status().ToString());
-    }
-  }
-  return Status::OK();
-}
-
-Result<std::unique_ptr<Message>> ReadMessage(std::shared_ptr<Buffer> metadata,
-                                             std::shared_ptr<Buffer> body) {
-  std::unique_ptr<Message> result;
-  auto listener = std::make_shared<AssignMessageDecoderListener>(&result);
-  // If the user does not pass in a body buffer then we assume they are skipping it
-  MessageDecoder decoder(listener, default_memory_pool(), body == nullptr);
-
-  if (metadata->size() < decoder.next_required_size()) {
-    return Status::Invalid("metadata_length should be at least ",
-                           decoder.next_required_size());
-  }
-
-  ARROW_RETURN_NOT_OK(decoder.Consume(metadata));
-
-  switch (decoder.state()) {
-    case MessageDecoder::State::INITIAL:
-      // Metadata did not request a body so we better not have provided one
-      DCHECK_EQ(body, nullptr);
-      return std::move(result);
-    case MessageDecoder::State::METADATA_LENGTH:
-      return Status::Invalid("metadata length is missing from the metadata buffer");
-    case MessageDecoder::State::METADATA:
-      return Status::Invalid("flatbuffer size ", decoder.next_required_size(),
-                             " invalid. Buffer size: ", metadata->size());
-    case MessageDecoder::State::BODY: {
-      if (body == nullptr) {
-        // Caller didn't give a body so just give them a message without body
-        return std::move(result);
-      }
-      if (body->size() != decoder.next_required_size()) {
-        return Status::IOError("Expected body buffer to be ",
-                               decoder.next_required_size(),
-                               " bytes for message body, got ", body->size());
-      }
-      RETURN_NOT_OK(decoder.Consume(body));
-      return std::move(result);
-    }
-    case MessageDecoder::State::EOS:
-      return Status::Invalid("Unexpected empty message in IPC file format");
-    default:
-      return Status::Invalid("Unexpected state: ", decoder.state());
-  }
-}
-
 Result<std::unique_ptr<Message>> ReadMessage(int64_t offset, int32_t metadata_length,
-                                             io::RandomAccessFile* file,
-                                             const FieldsLoaderFunction& fields_loader) {
+                                             io::RandomAccessFile* file) {
   std::unique_ptr<Message> result;
   auto listener = std::make_shared<AssignMessageDecoderListener>(&result);
   MessageDecoder decoder(listener);
@@ -385,16 +296,8 @@ Result<std::unique_ptr<Message>> ReadMessage(int64_t offset, int32_t metadata_le
                              " invalid. File offset: ", offset,
                              ", metadata length: ", metadata_length);
     case MessageDecoder::State::BODY: {
-      std::shared_ptr<Buffer> body;
-      if (fields_loader) {
-        ARROW_ASSIGN_OR_RAISE(
-            body, AllocateBuffer(decoder.next_required_size(), default_memory_pool()));
-        RETURN_NOT_OK(ReadFieldsSubset(offset, metadata_length, file, fields_loader,
-                                       metadata, decoder.next_required_size(), body));
-      } else {
-        ARROW_ASSIGN_OR_RAISE(
-            body, file->ReadAt(offset + metadata_length, decoder.next_required_size()));
-      }
+      ARROW_ASSIGN_OR_RAISE(auto body, file->ReadAt(offset + metadata_length,
+                                                    decoder.next_required_size()));
       if (body->size() < decoder.next_required_size()) {
         return Status::IOError("Expected to be able to read ",
                                decoder.next_required_size(),
@@ -408,60 +311,6 @@ Result<std::unique_ptr<Message>> ReadMessage(int64_t offset, int32_t metadata_le
     default:
       return Status::Invalid("Unexpected state: ", decoder.state());
   }
-}
-
-Future<std::shared_ptr<Message>> ReadMessageAsync(int64_t offset, int32_t metadata_length,
-                                                  int64_t body_length,
-                                                  io::RandomAccessFile* file,
-                                                  const io::IOContext& context) {
-  struct State {
-    std::unique_ptr<Message> result;
-    std::shared_ptr<MessageDecoderListener> listener;
-    std::shared_ptr<MessageDecoder> decoder;
-  };
-  auto state = std::make_shared<State>();
-  state->listener = std::make_shared<AssignMessageDecoderListener>(&state->result);
-  state->decoder = std::make_shared<MessageDecoder>(state->listener);
-
-  if (metadata_length < state->decoder->next_required_size()) {
-    return Status::Invalid("metadata_length should be at least ",
-                           state->decoder->next_required_size());
-  }
-  return file->ReadAsync(context, offset, metadata_length + body_length)
-      .Then([=](std::shared_ptr<Buffer> metadata) -> Result<std::shared_ptr<Message>> {
-        if (metadata->size() < metadata_length) {
-          return Status::Invalid("Expected to read ", metadata_length,
-                                 " metadata bytes but got ", metadata->size());
-        }
-        ARROW_RETURN_NOT_OK(
-            state->decoder->Consume(SliceBuffer(metadata, 0, metadata_length)));
-        switch (state->decoder->state()) {
-          case MessageDecoder::State::INITIAL:
-            return std::move(state->result);
-          case MessageDecoder::State::METADATA_LENGTH:
-            return Status::Invalid("metadata length is missing. File offset: ", offset,
-                                   ", metadata length: ", metadata_length);
-          case MessageDecoder::State::METADATA:
-            return Status::Invalid("flatbuffer size ",
-                                   state->decoder->next_required_size(),
-                                   " invalid. File offset: ", offset,
-                                   ", metadata length: ", metadata_length);
-          case MessageDecoder::State::BODY: {
-            auto body = SliceBuffer(metadata, metadata_length, body_length);
-            if (body->size() < state->decoder->next_required_size()) {
-              return Status::IOError("Expected to be able to read ",
-                                     state->decoder->next_required_size(),
-                                     " bytes for message body, got ", body->size());
-            }
-            RETURN_NOT_OK(state->decoder->Consume(body));
-            return std::move(state->result);
-          }
-          case MessageDecoder::State::EOS:
-            return Status::Invalid("Unexpected empty message in IPC file format");
-          default:
-            return Status::Invalid("Unexpected state: ", state->decoder->state());
-        }
-      });
 }
 
 Status AlignStream(io::InputStream* stream, int32_t alignment) {
@@ -574,9 +423,8 @@ Status WriteMessage(const Buffer& message, const IpcWriteOptions& options,
     RETURN_NOT_OK(file->Write(&internal::kIpcContinuationToken, sizeof(int32_t)));
   }
 
-  // Write the flatbuffer size prefix including padding in little endian
-  int32_t padded_flatbuffer_size =
-      bit_util::ToLittleEndian(padded_message_length - prefix_size);
+  // Write the flatbuffer size prefix including padding
+  int32_t padded_flatbuffer_size = padded_message_length - prefix_size;
   RETURN_NOT_OK(file->Write(&padded_flatbuffer_size, sizeof(int32_t)));
 
   // Write the flatbuffer
@@ -604,16 +452,14 @@ class MessageDecoder::MessageDecoderImpl {
  public:
   explicit MessageDecoderImpl(std::shared_ptr<MessageDecoderListener> listener,
                               State initial_state, int64_t initial_next_required_size,
-                              MemoryPool* pool, bool skip_body)
+                              MemoryPool* pool)
       : listener_(std::move(listener)),
         pool_(pool),
-        memory_manager_(CPUDevice::memory_manager(pool_)),
         state_(initial_state),
         next_required_size_(initial_next_required_size),
         chunks_(),
         buffered_size_(0),
-        metadata_(nullptr),
-        skip_body_(skip_body) {}
+        metadata_(nullptr) {}
 
   Status ConsumeData(const uint8_t* data, int64_t size) {
     if (buffered_size_ == 0) {
@@ -627,24 +473,10 @@ class MessageDecoder::MessageDecoderImpl {
             RETURN_NOT_OK(ConsumeMetadataLengthData(data, next_required_size_));
             break;
           case State::METADATA: {
-            // We need to copy metadata because it's used in
-            // ConsumeBody(). ConsumeBody() may be called from another
-            // ConsumeData(). We can't assume that the given data for
-            // the current ConsumeData() call is still valid in the
-            // next ConsumeData() call. So we need to copy metadata
-            // here.
-            ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Buffer> buffer,
-                                  AllocateBuffer(next_required_size_, pool_));
-            memcpy(buffer->mutable_data(), data, next_required_size_);
+            auto buffer = std::make_shared<Buffer>(data, next_required_size_);
             RETURN_NOT_OK(ConsumeMetadataBuffer(buffer));
           } break;
           case State::BODY: {
-            // We don't need to copy the given data for body because
-            // we can assume that a decoded record batch should be
-            // valid only in a listener_->OnMessageDecoded() call. If
-            // the passed message is needed to be valid after the
-            // call, it's a listener_'s responsibility. The listener_
-            // may copy the data for it.
             auto buffer = std::make_shared<Buffer>(data, next_required_size_);
             RETURN_NOT_OK(ConsumeBodyBuffer(buffer));
           } break;
@@ -660,12 +492,7 @@ class MessageDecoder::MessageDecoderImpl {
       return Status::OK();
     }
 
-    // We need to copy unused data because the given data for the
-    // current ConsumeData() call may be invalid in the next
-    // ConsumeData() call.
-    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Buffer> chunk, AllocateBuffer(size, pool_));
-    memcpy(chunk->mutable_data(), data, size);
-    chunks_.push_back(std::move(chunk));
+    chunks_.push_back(std::make_shared<Buffer>(data, size));
     buffered_size_ += size;
     return ConsumeChunks();
   }
@@ -749,18 +576,18 @@ class MessageDecoder::MessageDecoderImpl {
   }
 
   Status ConsumeInitialData(const uint8_t* data, int64_t size) {
-    return ConsumeInitial(bit_util::FromLittleEndian(util::SafeLoadAs<int32_t>(data)));
+    return ConsumeInitial(util::SafeLoadAs<int32_t>(data));
   }
 
   Status ConsumeInitialBuffer(const std::shared_ptr<Buffer>& buffer) {
     ARROW_ASSIGN_OR_RAISE(auto continuation, ConsumeDataBufferInt32(buffer));
-    return ConsumeInitial(bit_util::FromLittleEndian(continuation));
+    return ConsumeInitial(continuation);
   }
 
   Status ConsumeInitialChunks() {
     int32_t continuation = 0;
     RETURN_NOT_OK(ConsumeDataChunks(sizeof(int32_t), &continuation));
-    return ConsumeInitial(bit_util::FromLittleEndian(continuation));
+    return ConsumeInitial(continuation);
   }
 
   Status ConsumeInitial(int32_t continuation) {
@@ -788,19 +615,18 @@ class MessageDecoder::MessageDecoderImpl {
   }
 
   Status ConsumeMetadataLengthData(const uint8_t* data, int64_t size) {
-    return ConsumeMetadataLength(
-        bit_util::FromLittleEndian(util::SafeLoadAs<int32_t>(data)));
+    return ConsumeMetadataLength(util::SafeLoadAs<int32_t>(data));
   }
 
   Status ConsumeMetadataLengthBuffer(const std::shared_ptr<Buffer>& buffer) {
     ARROW_ASSIGN_OR_RAISE(auto metadata_length, ConsumeDataBufferInt32(buffer));
-    return ConsumeMetadataLength(bit_util::FromLittleEndian(metadata_length));
+    return ConsumeMetadataLength(metadata_length);
   }
 
   Status ConsumeMetadataLengthChunks() {
     int32_t metadata_length = 0;
     RETURN_NOT_OK(ConsumeDataChunks(sizeof(int32_t), &metadata_length));
-    return ConsumeMetadataLength(bit_util::FromLittleEndian(metadata_length));
+    return ConsumeMetadataLength(metadata_length);
   }
 
   Status ConsumeMetadataLength(int32_t metadata_length) {
@@ -823,7 +649,8 @@ class MessageDecoder::MessageDecoderImpl {
     if (buffer->is_cpu()) {
       metadata_ = buffer;
     } else {
-      ARROW_ASSIGN_OR_RAISE(metadata_, Buffer::ViewOrCopy(buffer, memory_manager_));
+      ARROW_ASSIGN_OR_RAISE(metadata_,
+                            Buffer::ViewOrCopy(buffer, CPUDevice::memory_manager(pool_)));
     }
     return ConsumeMetadata();
   }
@@ -834,21 +661,23 @@ class MessageDecoder::MessageDecoderImpl {
         if (chunks_[0]->is_cpu()) {
           metadata_ = std::move(chunks_[0]);
         } else {
-          ARROW_ASSIGN_OR_RAISE(metadata_,
-                                Buffer::ViewOrCopy(chunks_[0], memory_manager_));
+          ARROW_ASSIGN_OR_RAISE(
+              metadata_,
+              Buffer::ViewOrCopy(chunks_[0], CPUDevice::memory_manager(pool_)));
         }
         chunks_.erase(chunks_.begin());
       } else {
         metadata_ = SliceBuffer(chunks_[0], 0, next_required_size_);
         if (!chunks_[0]->is_cpu()) {
-          ARROW_ASSIGN_OR_RAISE(metadata_,
-                                Buffer::ViewOrCopy(metadata_, memory_manager_));
+          ARROW_ASSIGN_OR_RAISE(
+              metadata_, Buffer::ViewOrCopy(metadata_, CPUDevice::memory_manager(pool_)));
         }
         chunks_[0] = SliceBuffer(chunks_[0], next_required_size_);
       }
       buffered_size_ -= next_required_size_;
     } else {
-      ARROW_ASSIGN_OR_RAISE(metadata_, AllocateBuffer(next_required_size_, pool_));
+      ARROW_ASSIGN_OR_RAISE(auto metadata, AllocateBuffer(next_required_size_, pool_));
+      metadata_ = std::shared_ptr<Buffer>(metadata.release());
       RETURN_NOT_OK(ConsumeDataChunks(next_required_size_, metadata_->mutable_data()));
     }
     return ConsumeMetadata();
@@ -860,11 +689,12 @@ class MessageDecoder::MessageDecoderImpl {
     RETURN_NOT_OK(CheckMetadataAndGetBodyLength(*metadata_, &body_length));
 
     state_ = State::BODY;
-    next_required_size_ = skip_body_ ? 0 : body_length;
+    next_required_size_ = body_length;
     RETURN_NOT_OK(listener_->OnBody());
     if (next_required_size_ == 0) {
-      auto body = std::make_shared<Buffer>(nullptr, 0);
-      return ConsumeBody(&body);
+      ARROW_ASSIGN_OR_RAISE(auto body, AllocateBuffer(0, pool_));
+      std::shared_ptr<Buffer> shared_body(body.release());
+      return ConsumeBody(&shared_body);
     } else {
       return Status::OK();
     }
@@ -888,10 +718,10 @@ class MessageDecoder::MessageDecoderImpl {
       buffered_size_ -= used_size;
       return Status::OK();
     } else {
-      ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Buffer> body,
-                            AllocateBuffer(next_required_size_, pool_));
+      ARROW_ASSIGN_OR_RAISE(auto body, AllocateBuffer(next_required_size_, pool_));
       RETURN_NOT_OK(ConsumeDataChunks(next_required_size_, body->mutable_data()));
-      return ConsumeBody(&body);
+      std::shared_ptr<Buffer> shared_body(body.release());
+      return ConsumeBody(&shared_body);
     }
   }
 
@@ -910,7 +740,8 @@ class MessageDecoder::MessageDecoderImpl {
     if (buffer->is_cpu()) {
       return util::SafeLoadAs<int32_t>(buffer->data());
     } else {
-      ARROW_ASSIGN_OR_RAISE(auto cpu_buffer, Buffer::ViewOrCopy(buffer, memory_manager_));
+      ARROW_ASSIGN_OR_RAISE(auto cpu_buffer,
+                            Buffer::ViewOrCopy(buffer, CPUDevice::memory_manager(pool_)));
       return util::SafeLoadAs<int32_t>(cpu_buffer->data());
     }
   }
@@ -922,7 +753,8 @@ class MessageDecoder::MessageDecoderImpl {
     std::shared_ptr<Buffer> last_chunk;
     for (auto& chunk : chunks_) {
       if (!chunk->is_cpu()) {
-        ARROW_ASSIGN_OR_RAISE(chunk, Buffer::ViewOrCopy(chunk, memory_manager_));
+        ARROW_ASSIGN_OR_RAISE(
+            chunk, Buffer::ViewOrCopy(chunk, CPUDevice::memory_manager(pool_)));
       }
       auto data = chunk->data();
       auto data_size = chunk->size();
@@ -948,27 +780,24 @@ class MessageDecoder::MessageDecoderImpl {
 
   std::shared_ptr<MessageDecoderListener> listener_;
   MemoryPool* pool_;
-  std::shared_ptr<MemoryManager> memory_manager_;
   State state_;
   int64_t next_required_size_;
   std::vector<std::shared_ptr<Buffer>> chunks_;
   int64_t buffered_size_;
   std::shared_ptr<Buffer> metadata_;  // Must be CPU buffer
-  bool skip_body_;
 };
 
 MessageDecoder::MessageDecoder(std::shared_ptr<MessageDecoderListener> listener,
-                               MemoryPool* pool, bool skip_body) {
+                               MemoryPool* pool) {
   impl_.reset(new MessageDecoderImpl(std::move(listener), State::INITIAL,
-                                     kMessageDecoderNextRequiredSizeInitial, pool,
-                                     skip_body));
+                                     kMessageDecoderNextRequiredSizeInitial, pool));
 }
 
 MessageDecoder::MessageDecoder(std::shared_ptr<MessageDecoderListener> listener,
                                State initial_state, int64_t initial_next_required_size,
-                               MemoryPool* pool, bool skip_body) {
+                               MemoryPool* pool) {
   impl_.reset(new MessageDecoderImpl(std::move(listener), initial_state,
-                                     initial_next_required_size, pool, skip_body));
+                                     initial_next_required_size, pool));
 }
 
 MessageDecoder::~MessageDecoder() {}
@@ -1022,12 +851,24 @@ class InputStreamMessageReader : public MessageReader, public MessageDecoderList
 };
 
 std::unique_ptr<MessageReader> MessageReader::Open(io::InputStream* stream) {
-  return std::make_unique<InputStreamMessageReader>(stream);
+  return std::unique_ptr<MessageReader>(new InputStreamMessageReader(stream));
 }
 
 std::unique_ptr<MessageReader> MessageReader::Open(
     const std::shared_ptr<io::InputStream>& owned_stream) {
-  return std::make_unique<InputStreamMessageReader>(owned_stream);
+  return std::unique_ptr<MessageReader>(new InputStreamMessageReader(owned_stream));
+}
+
+// ----------------------------------------------------------------------
+// Deprecated functions
+
+Status ReadMessage(int64_t offset, int32_t metadata_length, io::RandomAccessFile* file,
+                   std::unique_ptr<Message>* message) {
+  return ReadMessage(offset, metadata_length, file).Value(message);
+}
+
+Status ReadMessage(io::InputStream* file, std::unique_ptr<Message>* out) {
+  return ReadMessage(file, default_memory_pool()).Value(out);
 }
 
 }  // namespace ipc

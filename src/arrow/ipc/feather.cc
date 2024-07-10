@@ -31,7 +31,6 @@
 
 #include "arrow/array.h"
 #include "arrow/buffer.h"
-#include "arrow/chunked_array.h"
 #include "arrow/io/interfaces.h"
 #include "arrow/ipc/metadata_internal.h"
 #include "arrow/ipc/options.h"
@@ -46,28 +45,28 @@
 #include "arrow/util/bit_util.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/logging.h"
-#include "arrow/visit_type_inline.h"
+#include "arrow/util/make_unique.h"
+#include "arrow/visitor_inline.h"
 
 #include "generated/feather_generated.h"
 
 namespace arrow {
 
 using internal::checked_cast;
+using internal::make_unique;
 
 class ExtensionType;
 
 namespace ipc {
 namespace feather {
 
-namespace {
+typedef flatbuffers::FlatBufferBuilder FBB;
 
-using FBB = flatbuffers::FlatBufferBuilder;
+static constexpr const char* kFeatherV1MagicBytes = "FEA1";
+static constexpr const int kFeatherDefaultAlignment = 8;
+static const uint8_t kPaddingBytes[kFeatherDefaultAlignment] = {0};
 
-constexpr const char* kFeatherV1MagicBytes = "FEA1";
-constexpr const int kFeatherDefaultAlignment = 8;
-const uint8_t kPaddingBytes[kFeatherDefaultAlignment] = {0};
-
-inline int64_t PaddedLength(int64_t nbytes) {
+static inline int64_t PaddedLength(int64_t nbytes) {
   static const int64_t alignment = kFeatherDefaultAlignment;
   return ((nbytes + alignment - 1) / alignment) * alignment;
 }
@@ -118,14 +117,14 @@ struct ColumnType {
   enum type { PRIMITIVE, CATEGORY, TIMESTAMP, DATE, TIME };
 };
 
-inline TimeUnit::type FromFlatbufferEnum(fbs::TimeUnit unit) {
+static inline TimeUnit::type FromFlatbufferEnum(fbs::TimeUnit unit) {
   return static_cast<TimeUnit::type>(static_cast<int>(unit));
 }
 
 /// For compatibility, we need to write any data sometimes just to keep producing
 /// files that can be read with an older reader.
-Status WritePaddedBlank(io::OutputStream* stream, int64_t length,
-                        int64_t* bytes_written) {
+static Status WritePaddedBlank(io::OutputStream* stream, int64_t length,
+                               int64_t* bytes_written) {
   const uint8_t null = 0;
   for (int64_t i = 0; i < length; i++) {
     RETURN_NOT_OK(stream->Write(&null, 1));
@@ -178,7 +177,7 @@ class ReaderV1 : public Reader {
           GetDataType(col->values(), col->metadata_type(), col->metadata(), &type));
       fields.push_back(::arrow::field(col->name()->str(), type));
     }
-    schema_ = ::arrow::schema(std::move(fields));
+    schema_ = ::arrow::schema(fields);
     return Status::OK();
   }
 
@@ -281,7 +280,7 @@ class ReaderV1 : public Reader {
 
     // If there are nulls, the null bitmask is first
     if (meta->null_count() > 0) {
-      int64_t null_bitmap_size = GetOutputLength(bit_util::BytesForBits(meta->length()));
+      int64_t null_bitmap_size = GetOutputLength(BitUtil::BytesForBits(meta->length()));
       buffers.push_back(SliceBuffer(buffer, offset, null_bitmap_size));
       offset += null_bitmap_size;
     } else {
@@ -309,14 +308,17 @@ class ReaderV1 : public Reader {
 
   std::shared_ptr<Schema> schema() const override { return schema_; }
 
-  Status GetDictionary(int field_index, std::shared_ptr<ArrayData>* out) {
+  Status GetDictionary(int field_index, std::shared_ptr<Array>* out) {
     const fbs::Column* col_meta = metadata_->columns()->Get(field_index);
     auto dict_meta = col_meta->metadata_as<fbs::CategoryMetadata>();
     const auto& dict_type =
         checked_cast<const DictionaryType&>(*schema_->field(field_index)->type());
 
-    return LoadValues(dict_type.value_type(), dict_meta->levels(),
-                      fbs::TypeMetadata::NONE, nullptr, out);
+    std::shared_ptr<ArrayData> out_data;
+    RETURN_NOT_OK(LoadValues(dict_type.value_type(), dict_meta->levels(),
+                             fbs::TypeMetadata::NONE, nullptr, &out_data));
+    *out = MakeArray(out_data);
+    return Status::OK();
   }
 
   Status GetColumn(int field_index, std::shared_ptr<ChunkedArray>* out) {
@@ -341,7 +343,7 @@ class ReaderV1 : public Reader {
       columns.emplace_back();
       RETURN_NOT_OK(GetColumn(i, &columns.back()));
     }
-    *out = Table::Make(this->schema(), std::move(columns), this->num_rows());
+    *out = Table::Make(this->schema(), columns, this->num_rows());
     return Status::OK();
   }
 
@@ -358,8 +360,7 @@ class ReaderV1 : public Reader {
       RETURN_NOT_OK(GetColumn(field_index, &columns.back()));
       fields.push_back(my_schema->field(field_index));
     }
-    *out = Table::Make(::arrow::schema(std::move(fields)), std::move(columns),
-                       this->num_rows());
+    *out = Table::Make(::arrow::schema(fields), columns, this->num_rows());
     return Status::OK();
   }
 
@@ -378,8 +379,7 @@ class ReaderV1 : public Reader {
       RETURN_NOT_OK(GetColumn(field_index, &columns.back()));
       fields.push_back(sch->field(field_index));
     }
-    *out = Table::Make(::arrow::schema(std::move(fields)), std::move(columns),
-                       this->num_rows());
+    *out = Table::Make(::arrow::schema(fields), columns, this->num_rows());
     return Status::OK();
   }
 
@@ -438,14 +438,14 @@ Result<fbs::Type> ToFlatbufferType(const DataType& type) {
   }
 }
 
-inline flatbuffers::Offset<fbs::PrimitiveArray> GetPrimitiveArray(
+static inline flatbuffers::Offset<fbs::PrimitiveArray> GetPrimitiveArray(
     FBB& fbb, const ArrayMetadata& array) {
   return fbs::CreatePrimitiveArray(fbb, array.type, fbs::Encoding::PLAIN, array.offset,
                                    array.length, array.null_count, array.total_bytes);
 }
 
 // Convert Feather enums to Flatbuffer enums
-inline fbs::TimeUnit ToFlatbufferEnum(TimeUnit::type unit) {
+static inline fbs::TimeUnit ToFlatbufferEnum(TimeUnit::type unit) {
   return static_cast<fbs::TimeUnit>(static_cast<int>(unit));
 }
 
@@ -457,7 +457,7 @@ const fbs::TypeMetadata COLUMN_TYPE_ENUM_MAPPING[] = {
     fbs::TypeMetadata::TimeMetadata        // TIME
 };
 
-inline fbs::TypeMetadata ToFlatbufferEnum(ColumnType::type column_type) {
+static inline fbs::TypeMetadata ToFlatbufferEnum(ColumnType::type column_type) {
   return COLUMN_TYPE_ENUM_MAPPING[column_type];
 }
 
@@ -536,8 +536,8 @@ struct ArrayWriterV1 {
       is_nested_type<T>::value || is_null_type<T>::value || is_decimal_type<T>::value ||
           std::is_same<DictionaryType, T>::value || is_duration_type<T>::value ||
           is_interval_type<T>::value || is_fixed_size_binary_type<T>::value ||
-          is_binary_view_like_type<T>::value || std::is_same<Date64Type, T>::value ||
-          std::is_same<Time64Type, T>::value || std::is_same<ExtensionType, T>::value,
+          std::is_same<Date64Type, T>::value || std::is_same<Time64Type, T>::value ||
+          std::is_same<ExtensionType, T>::value,
       Status>::type
   Visit(const T& type) {
     return Status::NotImplemented(type.ToString());
@@ -558,7 +558,7 @@ struct ArrayWriterV1 {
           prim_values.values()->data() + (prim_values.offset() * fw_type.bit_width() / 8);
       int64_t bit_offset = (prim_values.offset() * fw_type.bit_width()) % 8;
       return WriteBuffer(buffer,
-                         bit_util::BytesForBits(values.length() * fw_type.bit_width()),
+                         BitUtil::BytesForBits(values.length() * fw_type.bit_width()),
                          bit_offset);
     } else {
       return Status::OK();
@@ -606,8 +606,7 @@ struct ArrayWriterV1 {
     // Write the null bitmask
     if (values.null_count() > 0) {
       RETURN_NOT_OK(WriteBuffer(values.null_bitmap_data(),
-                                bit_util::BytesForBits(values.length()),
-                                values.offset()));
+                                BitUtil::BytesForBits(values.length()), values.offset()));
     }
     // Write data buffer(s)
     return VisitTypeInline(*values.type(), this);
@@ -704,17 +703,11 @@ Status WriteFeatherV1(const Table& table, io::OutputStream* dst) {
 
 class ReaderV2 : public Reader {
  public:
-  Status Open(const std::shared_ptr<io::RandomAccessFile>& source,
-              const IpcReadOptions& options) {
+  Status Open(const std::shared_ptr<io::RandomAccessFile>& source) {
     source_ = source;
-    options_ = options;
-    ARROW_ASSIGN_OR_RAISE(auto reader, RecordBatchFileReader::Open(source_, options_));
+    ARROW_ASSIGN_OR_RAISE(auto reader, RecordBatchFileReader::Open(source_));
     schema_ = reader->schema();
     return Status::OK();
-  }
-
-  Status Open(const std::shared_ptr<io::RandomAccessFile>& source) {
-    return Open(source, IpcReadOptions::Defaults());
   }
 
   int version() const override { return kFeatherV2Version; }
@@ -731,10 +724,12 @@ class ReaderV2 : public Reader {
     return Table::FromRecordBatches(reader->schema(), batches).Value(out);
   }
 
-  Status Read(std::shared_ptr<Table>* out) override { return Read(options_, out); }
+  Status Read(std::shared_ptr<Table>* out) override {
+    return Read(IpcReadOptions::Defaults(), out);
+  }
 
   Status Read(const std::vector<int>& indices, std::shared_ptr<Table>* out) override {
-    auto options = options_;
+    auto options = IpcReadOptions::Defaults();
     options.included_fields = indices;
     return Read(options, out);
   }
@@ -756,18 +751,10 @@ class ReaderV2 : public Reader {
  private:
   std::shared_ptr<io::RandomAccessFile> source_;
   std::shared_ptr<Schema> schema_;
-  IpcReadOptions options_;
 };
-
-}  // namespace
 
 Result<std::shared_ptr<Reader>> Reader::Open(
     const std::shared_ptr<io::RandomAccessFile>& source) {
-  return Reader::Open(source, IpcReadOptions::Defaults());
-}
-
-Result<std::shared_ptr<Reader>> Reader::Open(
-    const std::shared_ptr<io::RandomAccessFile>& source, const IpcReadOptions& options) {
   // Pathological issue where the file is smaller than header and footer
   // combined
   ARROW_ASSIGN_OR_RAISE(int64_t size, source->GetSize());
@@ -782,13 +769,12 @@ Result<std::shared_ptr<Reader>> Reader::Open(
 
   if (memcmp(buffer->data(), kFeatherV1MagicBytes, strlen(kFeatherV1MagicBytes)) == 0) {
     std::shared_ptr<ReaderV1> result = std::make_shared<ReaderV1>();
-    // IPC Read options are ignored for ReaderV1
     RETURN_NOT_OK(result->Open(source));
     return result;
   } else if (memcmp(buffer->data(), internal::kArrowMagicBytes,
                     strlen(internal::kArrowMagicBytes)) == 0) {
     std::shared_ptr<ReaderV2> result = std::make_shared<ReaderV2>();
-    RETURN_NOT_OK(result->Open(source, options));
+    RETURN_NOT_OK(result->Open(source));
     return result;
   } else {
     return Status::Invalid("Not a Feather V1 or Arrow IPC file");
@@ -811,14 +797,11 @@ Status WriteTable(const Table& table, io::OutputStream* dst,
     return WriteFeatherV1(table, dst);
   } else {
     IpcWriteOptions ipc_options = IpcWriteOptions::Defaults();
-    ipc_options.unify_dictionaries = true;
-    ipc_options.allow_64bit = true;
-    ARROW_ASSIGN_OR_RAISE(
-        ipc_options.codec,
-        util::Codec::Create(properties.compression, properties.compression_level));
+    ipc_options.compression = properties.compression;
+    ipc_options.compression_level = properties.compression_level;
 
     std::shared_ptr<RecordBatchWriter> writer;
-    ARROW_ASSIGN_OR_RAISE(writer, MakeFileWriter(dst, table.schema(), ipc_options));
+    ARROW_ASSIGN_OR_RAISE(writer, NewFileWriter(dst, table.schema(), ipc_options));
     RETURN_NOT_OK(writer->WriteTable(table, properties.chunksize));
     return writer->Close();
   }

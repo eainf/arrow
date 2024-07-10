@@ -33,7 +33,6 @@
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/util.h"
 #include "arrow/util/compression.h"
-#include "arrow/util/config.h"
 
 namespace arrow {
 namespace io {
@@ -211,28 +210,13 @@ TEST_P(CompressedInputStreamTest, ConcatenatedStreams) {
   auto data2 = MakeCompressibleData(200);
   auto compressed1 = CompressDataOneShot(codec.get(), data1);
   auto compressed2 = CompressDataOneShot(codec.get(), data2);
-  std::vector<uint8_t> expected;
+
+  ASSERT_OK_AND_ASSIGN(auto concatenated, ConcatenateBuffers({compressed1, compressed2}));
+  std::vector<uint8_t> decompressed, expected;
+  ASSERT_OK(RunCompressedInputStream(codec.get(), concatenated, &decompressed));
   std::copy(data1.begin(), data1.end(), std::back_inserter(expected));
   std::copy(data2.begin(), data2.end(), std::back_inserter(expected));
 
-  ASSERT_OK_AND_ASSIGN(auto concatenated, ConcatenateBuffers({compressed1, compressed2}));
-  std::vector<uint8_t> decompressed;
-  ASSERT_OK(RunCompressedInputStream(codec.get(), concatenated, &decompressed));
-  ASSERT_EQ(decompressed.size(), expected.size());
-  ASSERT_EQ(decompressed, expected);
-
-  // Same, but with an empty decompressed stream in the middle
-  auto compressed_empty = CompressDataOneShot(codec.get(), {});
-  ASSERT_OK_AND_ASSIGN(concatenated,
-                       ConcatenateBuffers({compressed1, compressed_empty, compressed2}));
-  ASSERT_OK(RunCompressedInputStream(codec.get(), concatenated, &decompressed));
-  ASSERT_EQ(decompressed.size(), expected.size());
-  ASSERT_EQ(decompressed, expected);
-
-  // Same, but with an empty decompressed stream at the end
-  ASSERT_OK_AND_ASSIGN(concatenated,
-                       ConcatenateBuffers({compressed1, compressed2, compressed_empty}));
-  ASSERT_OK(RunCompressedInputStream(codec.get(), concatenated, &decompressed));
   ASSERT_EQ(decompressed.size(), expected.size());
   ASSERT_EQ(decompressed, expected);
 }
@@ -272,12 +256,6 @@ TEST(TestSnappyOutputStream, NotImplemented) {
   std::shared_ptr<OutputStream> stream = std::make_shared<MockOutputStream>();
   ASSERT_RAISES(NotImplemented, CompressedOutputStream::Make(codec.get(), stream));
 }
-#endif
-
-#if !defined ARROW_WITH_ZLIB && !defined ARROW_WITH_BROTLI && !defined ARROW_WITH_LZ4 && \
-    !defined ARROW_WITH_ZSTD
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(CompressedInputStreamTest);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(CompressedOutputStreamTest);
 #endif
 
 #ifdef ARROW_WITH_ZLIB

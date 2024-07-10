@@ -17,19 +17,16 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <random>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "arrow/status.h"
-#include "arrow/testing/future_util.h"
 #include "arrow/testing/gtest_util.h"
 #include "arrow/util/task_group.h"
 #include "arrow/util/thread_pool.h"
@@ -79,29 +76,23 @@ void TestTaskGroupErrors(std::shared_ptr<TaskGroup> task_group) {
 
   std::atomic<int> count(0);
 
-  auto task_group_was_ok = false;
-  task_group->Append([&]() -> Status {
-    for (int i = 0; i < NSUCCESSES; ++i) {
-      task_group->Append([&]() {
-        count++;
-        return Status::OK();
-      });
-    }
-    task_group_was_ok = task_group->ok();
-    for (int i = 0; i < NERRORS; ++i) {
-      task_group->Append([&]() {
-        SleepFor(1e-2);
-        count++;
-        return Status::Invalid("some message");
-      });
-    }
-
-    return Status::OK();
-  });
+  for (int i = 0; i < NSUCCESSES; ++i) {
+    task_group->Append([&]() {
+      count++;
+      return Status::OK();
+    });
+  }
+  ASSERT_TRUE(task_group->ok());
+  for (int i = 0; i < NERRORS; ++i) {
+    task_group->Append([&]() {
+      SleepFor(1e-2);
+      count++;
+      return Status::Invalid("some message");
+    });
+  }
 
   // Task error is propagated
   ASSERT_RAISES(Invalid, task_group->Finish());
-  ASSERT_TRUE(task_group_was_ok);
   ASSERT_FALSE(task_group->ok());
   if (task_group->parallelism() == 1) {
     // Serial: exactly two successes and an error
@@ -115,75 +106,80 @@ void TestTaskGroupErrors(std::shared_ptr<TaskGroup> task_group) {
   ASSERT_RAISES(Invalid, task_group->Finish());
 }
 
-void TestTaskGroupCancel(std::shared_ptr<TaskGroup> task_group, StopSource* stop_source) {
-  const int NSUCCESSES = 2;
-  const int NCANCELS = 20;
+// Check TaskGroup behaviour with a bunch of all-successful tasks and task groups
+void TestTaskSubGroupsSuccess(std::shared_ptr<TaskGroup> task_group) {
+  const int NTASKS = 50;
+  const int NGROUPS = 7;
 
-  std::atomic<int> count(0);
+  auto sleeps = RandomSleepDurations(NTASKS, 1e-4, 1e-3);
+  std::vector<std::shared_ptr<TaskGroup>> groups = {task_group};
 
-  auto task_group_was_ok = false;
-  task_group->Append([&]() -> Status {
-    for (int i = 0; i < NSUCCESSES; ++i) {
-      task_group->Append([&]() {
-        count++;
-        return Status::OK();
-      });
-    }
-    task_group_was_ok = task_group->ok();
-    for (int i = 0; i < NCANCELS; ++i) {
-      task_group->Append([&]() {
-        SleepFor(1e-2);
-        stop_source->RequestStop();
-        count++;
-        return Status::OK();
-      });
-    }
-
-    return Status::OK();
-  });
-
-  // Cancellation is propagated
-  ASSERT_RAISES(Cancelled, task_group->Finish());
-  ASSERT_TRUE(task_group_was_ok);
-  ASSERT_FALSE(task_group->ok());
-  if (task_group->parallelism() == 1) {
-    // Serial: exactly three successes
-    ASSERT_EQ(count.load(), NSUCCESSES + 1);
-  } else {
-    // Parallel: at least three successes
-    ASSERT_GE(count.load(), NSUCCESSES + 1);
-    ASSERT_LE(count.load(), NSUCCESSES * task_group->parallelism());
+  // Create some subgroups
+  for (int i = 0; i < NGROUPS - 1; ++i) {
+    groups.push_back(task_group->MakeSubGroup());
   }
+
+  // Add NTASKS sleeps amongst all groups
+  std::atomic<int> count(0);
+  for (int i = 0; i < NTASKS; ++i) {
+    groups[i % NGROUPS]->Append([&, i]() {
+      SleepFor(sleeps[i]);
+      count += i;
+      return Status::OK();
+    });
+  }
+  ASSERT_TRUE(task_group->ok());
+
+  // Finish all subgroups first, then main group
+  for (int i = NGROUPS - 1; i >= 0; --i) {
+    ASSERT_OK(groups[i]->Finish());
+  }
+  ASSERT_TRUE(task_group->ok());
+  ASSERT_EQ(count.load(), NTASKS * (NTASKS - 1) / 2);
   // Finish() is idempotent
-  ASSERT_RAISES(Cancelled, task_group->Finish());
+  ASSERT_OK(task_group->Finish());
 }
 
-class CopyCountingTask {
- public:
-  explicit CopyCountingTask(std::shared_ptr<uint8_t> target)
-      : counter(0), target(std::move(target)) {}
+// Check TaskGroup behaviour with both successful and failing tasks and task groups
+void TestTaskSubGroupsErrors(std::shared_ptr<TaskGroup> task_group) {
+  const int NTASKS = 50;
+  const int NGROUPS = 7;
+  const int FAIL_EVERY = 17;
+  std::vector<std::shared_ptr<TaskGroup>> groups = {task_group};
 
-  CopyCountingTask(const CopyCountingTask& other)
-      : counter(other.counter + 1), target(other.target) {}
-
-  CopyCountingTask& operator=(const CopyCountingTask& other) {
-    counter = other.counter + 1;
-    target = other.target;
-    return *this;
+  // Create some subgroups
+  for (int i = 0; i < NGROUPS - 1; ++i) {
+    groups.push_back(task_group->MakeSubGroup());
   }
 
-  CopyCountingTask(CopyCountingTask&& other) = default;
-  CopyCountingTask& operator=(CopyCountingTask&& other) = default;
-
-  Status operator()() {
-    *target = counter;
-    return Status::OK();
+  // Add NTASKS sleeps amongst all groups
+  for (int i = 0; i < NTASKS; ++i) {
+    groups[i % NGROUPS]->Append([&, i]() {
+      SleepFor(1e-3);
+      // As NGROUPS > NTASKS / FAIL_EVERY, some subgroups are successful
+      if (i % FAIL_EVERY == 0) {
+        return Status::Invalid("some message");
+      } else {
+        return Status::OK();
+      }
+    });
   }
 
- private:
-  uint8_t counter;
-  std::shared_ptr<uint8_t> target;
-};
+  // Finish all subgroups first, then main group
+  int nsuccessful = 0;
+  for (int i = NGROUPS - 1; i > 0; --i) {
+    Status st = groups[i]->Finish();
+    if (st.ok()) {
+      ++nsuccessful;
+    } else {
+      ASSERT_RAISES(Invalid, st);
+    }
+  }
+  ASSERT_RAISES(Invalid, task_group->Finish());
+  ASSERT_FALSE(task_group->ok());
+  // Finish() is idempotent
+  ASSERT_RAISES(Invalid, task_group->Finish());
+}
 
 // Check TaskGroup behaviour with tasks spawning other tasks
 void TestTasksSpawnTasks(std::shared_ptr<TaskGroup> task_group) {
@@ -280,95 +276,18 @@ void StressFailingTaskGroupLifetime(std::function<std::shared_ptr<TaskGroup>()> 
   }
 }
 
-void TestNoCopyTask(std::shared_ptr<TaskGroup> task_group) {
-  auto counter = std::make_shared<uint8_t>(0);
-  CopyCountingTask task(counter);
-  task_group->Append(std::move(task));
-  ASSERT_OK(task_group->Finish());
-  ASSERT_EQ(0, *counter);
-}
-
-void TestFinishNotSticky(std::function<std::shared_ptr<TaskGroup>()> factory) {
-  // If a task is added that runs very quickly it might decrement the task counter back
-  // down to 0 and mark the completion future as complete before all tasks are added.
-  // The "finished future" of the task group could get stuck to complete.
-  //
-  // Instead the task group should not allow the finished future to be marked complete
-  // until after FinishAsync has been called.
-  const int NTASKS = 100;
-  for (int i = 0; i < NTASKS; ++i) {
-    auto task_group = factory();
-    // Add a task and let it complete
-    task_group->Append([] { return Status::OK(); });
-    // Wait a little bit, if the task group was going to lock the finish hopefully it
-    // would do so here while we wait
-    SleepFor(1e-2);
-
-    // Add a new task that will still be running
-    std::atomic<bool> ready(false);
-    std::mutex m;
-    std::condition_variable cv;
-    task_group->Append([&m, &cv, &ready] {
-      std::unique_lock<std::mutex> lk(m);
-      cv.wait(lk, [&ready] { return ready.load(); });
-      return Status::OK();
-    });
-
-    // Ensure task group not finished already
-    auto finished = task_group->FinishAsync();
-    ASSERT_FALSE(finished.is_finished());
-
-    std::unique_lock<std::mutex> lk(m);
-    ready = true;
-    lk.unlock();
-    cv.notify_one();
-
-    ASSERT_FINISHES_OK(finished);
-  }
-}
-
-void TestFinishNeverStarted(std::shared_ptr<TaskGroup> task_group) {
-  // If we call FinishAsync we are done adding tasks so if we never added any it should be
-  // completed
-  auto finished = task_group->FinishAsync();
-  ASSERT_TRUE(finished.Wait(1));
-}
-
-void TestFinishAlreadyCompleted(std::function<std::shared_ptr<TaskGroup>()> factory) {
-  // If we call FinishAsync we are done adding tasks so even if no tasks are running we
-  // should still be completed
-  const int NTASKS = 100;
-  for (int i = 0; i < NTASKS; ++i) {
-    auto task_group = factory();
-    // Add a task and let it complete
-    task_group->Append([] { return Status::OK(); });
-    // Wait a little bit, hopefully enough time for the task to finish on one of these
-    // iterations
-    SleepFor(1e-2);
-    auto finished = task_group->FinishAsync();
-    ASSERT_FINISHES_OK(finished);
-  }
-}
-
 TEST(SerialTaskGroup, Success) { TestTaskGroupSuccess(TaskGroup::MakeSerial()); }
 
 TEST(SerialTaskGroup, Errors) { TestTaskGroupErrors(TaskGroup::MakeSerial()); }
 
-TEST(SerialTaskGroup, Cancel) {
-  StopSource stop_source;
-  TestTaskGroupCancel(TaskGroup::MakeSerial(stop_source.token()), &stop_source);
-}
-
 TEST(SerialTaskGroup, TasksSpawnTasks) { TestTasksSpawnTasks(TaskGroup::MakeSerial()); }
 
-TEST(SerialTaskGroup, NoCopyTask) { TestNoCopyTask(TaskGroup::MakeSerial()); }
-
-TEST(SerialTaskGroup, FinishNeverStarted) {
-  TestFinishNeverStarted(TaskGroup::MakeSerial());
+TEST(SerialTaskGroup, SubGroupsSuccess) {
+  TestTaskSubGroupsSuccess(TaskGroup::MakeSerial());
 }
 
-TEST(SerialTaskGroup, FinishAlreadyCompleted) {
-  TestFinishAlreadyCompleted([] { return TaskGroup::MakeSerial(); });
+TEST(SerialTaskGroup, SubGroupsErrors) {
+  TestTaskSubGroupsErrors(TaskGroup::MakeSerial());
 }
 
 TEST(ThreadedTaskGroup, Success) {
@@ -385,24 +304,23 @@ TEST(ThreadedTaskGroup, Errors) {
   TestTaskGroupErrors(TaskGroup::MakeThreaded(thread_pool.get()));
 }
 
-TEST(ThreadedTaskGroup, Cancel) {
-  std::shared_ptr<ThreadPool> thread_pool;
-  ASSERT_OK_AND_ASSIGN(thread_pool, ThreadPool::Make(4));
-
-  StopSource stop_source;
-  TestTaskGroupCancel(TaskGroup::MakeThreaded(thread_pool.get(), stop_source.token()),
-                      &stop_source);
-}
-
 TEST(ThreadedTaskGroup, TasksSpawnTasks) {
   auto task_group = TaskGroup::MakeThreaded(GetCpuThreadPool());
   TestTasksSpawnTasks(task_group);
 }
 
-TEST(ThreadedTaskGroup, NoCopyTask) {
+TEST(ThreadedTaskGroup, SubGroupsSuccess) {
   std::shared_ptr<ThreadPool> thread_pool;
   ASSERT_OK_AND_ASSIGN(thread_pool, ThreadPool::Make(4));
-  TestNoCopyTask(TaskGroup::MakeThreaded(thread_pool.get()));
+
+  TestTaskSubGroupsSuccess(TaskGroup::MakeThreaded(thread_pool.get()));
+}
+
+TEST(ThreadedTaskGroup, SubGroupsErrors) {
+  std::shared_ptr<ThreadPool> thread_pool;
+  ASSERT_OK_AND_ASSIGN(thread_pool, ThreadPool::Make(4));
+
+  TestTaskSubGroupsErrors(TaskGroup::MakeThreaded(thread_pool.get()));
 }
 
 TEST(ThreadedTaskGroup, StressTaskGroupLifetime) {
@@ -418,26 +336,6 @@ TEST(ThreadedTaskGroup, StressFailingTaskGroupLifetime) {
 
   StressFailingTaskGroupLifetime(
       [&] { return TaskGroup::MakeThreaded(thread_pool.get()); });
-}
-
-TEST(ThreadedTaskGroup, FinishNotSticky) {
-  std::shared_ptr<ThreadPool> thread_pool;
-  ASSERT_OK_AND_ASSIGN(thread_pool, ThreadPool::Make(16));
-
-  TestFinishNotSticky([&] { return TaskGroup::MakeThreaded(thread_pool.get()); });
-}
-
-TEST(ThreadedTaskGroup, FinishNeverStarted) {
-  std::shared_ptr<ThreadPool> thread_pool;
-  ASSERT_OK_AND_ASSIGN(thread_pool, ThreadPool::Make(4));
-  TestFinishNeverStarted(TaskGroup::MakeThreaded(thread_pool.get()));
-}
-
-TEST(ThreadedTaskGroup, FinishAlreadyCompleted) {
-  std::shared_ptr<ThreadPool> thread_pool;
-  ASSERT_OK_AND_ASSIGN(thread_pool, ThreadPool::Make(16));
-
-  TestFinishAlreadyCompleted([&] { return TaskGroup::MakeThreaded(thread_pool.get()); });
 }
 
 }  // namespace internal

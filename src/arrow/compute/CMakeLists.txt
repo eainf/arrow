@@ -15,44 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-add_custom_target(arrow-compute-tests)
+add_custom_target(arrow_compute)
 
 arrow_install_all_headers("arrow/compute")
 
-if(ARROW_COMPUTE)
-  # pkg-config support
-  arrow_add_pkg_config("arrow-compute")
-endif()
+# pkg-config support
+arrow_add_pkg_config("arrow-compute")
 
 #
 # Unit tests
 #
 
-set(ARROW_COMPUTE_TEST_PREFIX "arrow-compute")
-set(ARROW_COMPUTE_TEST_LABELS "arrow-compute-tests")
-set(ARROW_COMPUTE_TEST_ARGS PREFIX ${ARROW_COMPUTE_TEST_PREFIX} LABELS
-                            ${ARROW_COMPUTE_TEST_LABELS})
-
-# This will only add the test if ARROW_COMPUTE is enabled, meaning the full kernel registry is available.
-#
-# The following kernels are always present in default builds:
-#  - array_filter
-#  - array_take
-#  - cast
-#  - dictionary_encode
-#  - drop_null
-#  - filter
-#  - indices_nonzero
-#  - take
-#  - unique
-#  - value_counts
-#
-# Also see: GH-34388, GH-34615
 function(ADD_ARROW_COMPUTE_TEST REL_TEST_NAME)
-  if(NOT ARROW_COMPUTE)
-    return()
-  endif()
-
+  set(options)
   set(one_value_args PREFIX)
   set(multi_value_args LABELS)
   cmake_parse_arguments(ARG
@@ -64,16 +39,18 @@ function(ADD_ARROW_COMPUTE_TEST REL_TEST_NAME)
   if(ARG_PREFIX)
     set(PREFIX ${ARG_PREFIX})
   else()
-    set(PREFIX ${ARROW_COMPUTE_TEST_PREFIX})
+    set(PREFIX "arrow-compute")
   endif()
 
   if(ARG_LABELS)
     set(LABELS ${ARG_LABELS})
   else()
-    set(LABELS ${ARROW_COMPUTE_TEST_LABELS})
+    set(LABELS "arrow_compute")
   endif()
 
   add_arrow_test(${REL_TEST_NAME}
+                 EXTRA_LINK_LIBS
+                 ${ARROW_DATASET_TEST_LINK_LIBS}
                  PREFIX
                  ${PREFIX}
                  LABELS
@@ -81,21 +58,9 @@ function(ADD_ARROW_COMPUTE_TEST REL_TEST_NAME)
                  ${ARG_UNPARSED_ARGUMENTS})
 endfunction()
 
-add_arrow_test(internals_test
-               ${ARROW_COMPUTE_TEST_ARGS}
-               SOURCES
-               function_test.cc
-               exec_test.cc
-               kernel_test.cc
-               light_array_test.cc
-               registry_test.cc
-               key_hash_test.cc
-               row/compare_test.cc)
-
-add_arrow_compute_test(expression_test SOURCES expression_test.cc)
-
-add_arrow_benchmark(function_benchmark PREFIX "arrow-compute")
+add_arrow_compute_test(compute_test)
+add_arrow_compute_test(expression_test)
+add_arrow_compute_test(operations/operations_test)
+add_arrow_benchmark(compute_benchmark)
 
 add_subdirectory(kernels)
-
-add_subdirectory(row)

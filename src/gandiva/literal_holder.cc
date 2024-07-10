@@ -38,7 +38,7 @@ struct LiteralToStream {
 std::string ToString(const LiteralHolder& holder) {
   std::stringstream ss;
   LiteralToStream<std::stringstream> visitor{ss};
-  ::std::visit(visitor, holder);
+  ::arrow::util::visit(visitor, holder);
   return ss.str();
 }
 

@@ -58,15 +58,6 @@
     ARROW_RETURN_IF_(!__s.ok(), __s, ARROW_STRINGIFY(status));        \
   } while (false)
 
-/// \brief Given `expr` and `warn_msg`; log `warn_msg` if `expr` is a non-ok status
-#define ARROW_WARN_NOT_OK(expr, warn_msg) \
-  do {                                    \
-    ::arrow::Status _s = (expr);          \
-    if (ARROW_PREDICT_FALSE(!_s.ok())) {  \
-      _s.Warn(warn_msg);                  \
-    }                                     \
-  } while (false)
-
 #define RETURN_NOT_OK_ELSE(s, else_)                            \
   do {                                                          \
     ::arrow::Status _s = ::arrow::internal::GenericToStatus(s); \
@@ -92,7 +83,6 @@ enum class StatusCode : char {
   IOError = 5,
   CapacityError = 6,
   IndexError = 7,
-  Cancelled = 8,
   UnknownError = 9,
   NotImplemented = 10,
   SerializationError = 11,
@@ -129,11 +119,11 @@ class ARROW_EXPORT StatusDetail {
 ///
 /// Additionally, if an error occurred, a specific error message is generally
 /// attached.
-class ARROW_EXPORT [[nodiscard]] Status : public util::EqualityComparable<Status>,
-                                          public util::ToStringOstreamable<Status> {
+class ARROW_MUST_USE_TYPE ARROW_EXPORT Status : public util::EqualityComparable<Status>,
+                                                public util::ToStringOstreamable<Status> {
  public:
   // Create a success status.
-  constexpr Status() noexcept : state_(NULLPTR) {}
+  Status() noexcept : state_(NULLPTR) {}
   ~Status() noexcept {
     // ARROW-2400: On certain compilers, splitting off the slow path improves
     // performance significantly.
@@ -214,12 +204,6 @@ class ARROW_EXPORT [[nodiscard]] Status : public util::EqualityComparable<Status
     return Status::FromArgs(StatusCode::Invalid, std::forward<Args>(args)...);
   }
 
-  /// Return an error status for cancelled operation
-  template <typename... Args>
-  static Status Cancelled(Args&&... args) {
-    return Status::FromArgs(StatusCode::Cancelled, std::forward<Args>(args)...);
-  }
-
   /// Return an error status when an index is out of bounds
   template <typename... Args>
   static Status IndexError(Args&&... args) {
@@ -271,54 +255,44 @@ class ARROW_EXPORT [[nodiscard]] Status : public util::EqualityComparable<Status
   }
 
   /// Return true iff the status indicates success.
-  constexpr bool ok() const { return (state_ == NULLPTR); }
+  bool ok() const { return (state_ == NULLPTR); }
 
   /// Return true iff the status indicates an out-of-memory error.
-  constexpr bool IsOutOfMemory() const { return code() == StatusCode::OutOfMemory; }
+  bool IsOutOfMemory() const { return code() == StatusCode::OutOfMemory; }
   /// Return true iff the status indicates a key lookup error.
-  constexpr bool IsKeyError() const { return code() == StatusCode::KeyError; }
+  bool IsKeyError() const { return code() == StatusCode::KeyError; }
   /// Return true iff the status indicates invalid data.
-  constexpr bool IsInvalid() const { return code() == StatusCode::Invalid; }
-  /// Return true iff the status indicates a cancelled operation.
-  constexpr bool IsCancelled() const { return code() == StatusCode::Cancelled; }
+  bool IsInvalid() const { return code() == StatusCode::Invalid; }
   /// Return true iff the status indicates an IO-related failure.
-  constexpr bool IsIOError() const { return code() == StatusCode::IOError; }
+  bool IsIOError() const { return code() == StatusCode::IOError; }
   /// Return true iff the status indicates a container reaching capacity limits.
-  constexpr bool IsCapacityError() const { return code() == StatusCode::CapacityError; }
+  bool IsCapacityError() const { return code() == StatusCode::CapacityError; }
   /// Return true iff the status indicates an out of bounds index.
-  constexpr bool IsIndexError() const { return code() == StatusCode::IndexError; }
+  bool IsIndexError() const { return code() == StatusCode::IndexError; }
   /// Return true iff the status indicates a type error.
-  constexpr bool IsTypeError() const { return code() == StatusCode::TypeError; }
+  bool IsTypeError() const { return code() == StatusCode::TypeError; }
   /// Return true iff the status indicates an unknown error.
-  constexpr bool IsUnknownError() const { return code() == StatusCode::UnknownError; }
+  bool IsUnknownError() const { return code() == StatusCode::UnknownError; }
   /// Return true iff the status indicates an unimplemented operation.
-  constexpr bool IsNotImplemented() const { return code() == StatusCode::NotImplemented; }
+  bool IsNotImplemented() const { return code() == StatusCode::NotImplemented; }
   /// Return true iff the status indicates a (de)serialization failure
-  constexpr bool IsSerializationError() const {
-    return code() == StatusCode::SerializationError;
-  }
+  bool IsSerializationError() const { return code() == StatusCode::SerializationError; }
   /// Return true iff the status indicates a R-originated error.
-  constexpr bool IsRError() const { return code() == StatusCode::RError; }
+  bool IsRError() const { return code() == StatusCode::RError; }
 
-  constexpr bool IsCodeGenError() const { return code() == StatusCode::CodeGenError; }
+  bool IsCodeGenError() const { return code() == StatusCode::CodeGenError; }
 
-  constexpr bool IsExpressionValidationError() const {
+  bool IsExpressionValidationError() const {
     return code() == StatusCode::ExpressionValidationError;
   }
 
-  constexpr bool IsExecutionError() const { return code() == StatusCode::ExecutionError; }
-  constexpr bool IsAlreadyExists() const { return code() == StatusCode::AlreadyExists; }
+  bool IsExecutionError() const { return code() == StatusCode::ExecutionError; }
+  bool IsAlreadyExists() const { return code() == StatusCode::AlreadyExists; }
 
   /// \brief Return a string representation of this status suitable for printing.
   ///
   /// The string "OK" is returned for success.
   std::string ToString() const;
-
-  /// \brief Return a string representation of this status without
-  /// context lines suitable for printing.
-  ///
-  /// The string "OK" is returned for success.
-  std::string ToStringWithoutContextLines() const;
 
   /// \brief Return a string representation of the status code, without the message
   /// text or POSIX code information.
@@ -326,18 +300,14 @@ class ARROW_EXPORT [[nodiscard]] Status : public util::EqualityComparable<Status
   static std::string CodeAsString(StatusCode);
 
   /// \brief Return the StatusCode value attached to this status.
-  constexpr StatusCode code() const { return ok() ? StatusCode::OK : state_->code; }
+  StatusCode code() const { return ok() ? StatusCode::OK : state_->code; }
 
   /// \brief Return the specific error message attached to this status.
-  const std::string& message() const {
-    static const std::string no_message = "";
-    return ok() ? no_message : state_->msg;
-  }
+  std::string message() const { return ok() ? "" : state_->msg; }
 
   /// \brief Return the status detail attached to this message.
-  const std::shared_ptr<StatusDetail>& detail() const {
-    static std::shared_ptr<StatusDetail> no_detail = NULLPTR;
-    return state_ ? state_->detail : no_detail;
+  std::shared_ptr<StatusDetail> detail() const {
+    return state_ == NULLPTR ? NULLPTR : state_->detail;
   }
 
   /// \brief Return a new Status copying the existing status, but
@@ -352,9 +322,6 @@ class ARROW_EXPORT [[nodiscard]] Status : public util::EqualityComparable<Status
   Status WithMessage(Args&&... args) const {
     return FromArgs(code(), std::forward<Args>(args)...).WithDetail(detail());
   }
-
-  void Warn() const;
-  void Warn(const std::string& message) const;
 
   [[noreturn]] void Abort() const;
   [[noreturn]] void Abort(const std::string& message) const;
@@ -463,7 +430,7 @@ namespace internal {
 
 // Extract Status from Status or Result<T>
 // Useful for the status check macros such as RETURN_NOT_OK.
-inline const Status& GenericToStatus(const Status& st) { return st; }
+inline Status GenericToStatus(const Status& st) { return st; }
 inline Status GenericToStatus(Status&& st) { return std::move(st); }
 
 }  // namespace internal

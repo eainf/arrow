@@ -25,7 +25,7 @@
 
 namespace gandiva {
 
-arrow::Status ExportedContextFunctions::AddMappings(Engine* engine) const {
+void ExportedContextFunctions::AddMappings(Engine* engine) const {
   std::vector<llvm::Type*> args;
   auto types = engine->types();
 
@@ -50,7 +50,6 @@ arrow::Status ExportedContextFunctions::AddMappings(Engine* engine) const {
 
   engine->AddGlobalMappingForFunc("gdv_fn_context_arena_reset", types->void_type(), args,
                                   reinterpret_cast<void*>(gdv_fn_context_arena_reset));
-  return arrow::Status::OK();
 }
 
 }  // namespace gandiva

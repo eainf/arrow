@@ -16,8 +16,8 @@
 # under the License.
 
 prefix=@CMAKE_INSTALL_PREFIX@
-includedir=@ARROW_PKG_CONFIG_INCLUDEDIR@
-libdir=@ARROW_PKG_CONFIG_LIBDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 
 so_version=@ARROW_SO_VERSION@
 abi_version=@ARROW_SO_VERSION@
@@ -25,9 +25,7 @@ full_so_version=@ARROW_FULL_SO_VERSION@
 
 Name: Apache Parquet
 Description: Apache Parquet is a columnar storage format.
-Version: @ARROW_VERSION@
-Requires: arrow@PARQUET_PC_REQUIRES@
-Requires.private:@PARQUET_PC_REQUIRES_PRIVATE@
+Version: @PARQUET_VERSION@
+Requires: arrow
 Libs: -L${libdir} -lparquet
-Cflags: -I${includedir}@PARQUET_PC_CFLAGS@
-Cflags.private:@PARQUET_PC_CFLAGS_PRIVATE@
+Cflags: -I${includedir}

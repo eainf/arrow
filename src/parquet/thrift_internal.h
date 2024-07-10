@@ -17,16 +17,17 @@
 
 #pragma once
 
-#include "parquet/windows_compatibility.h"
+#include "arrow/util/windows_compatibility.h"
 
 #include <cstdint>
-#include <limits>
-
+// Check if thrift version < 0.11.0
+// or if FORCE_BOOST_SMART_PTR is defined. Ref: https://thrift.apache.org/lib/cpp
+#if defined(PARQUET_THRIFT_USE_BOOST) || defined(FORCE_BOOST_SMART_PTR)
+#include <boost/shared_ptr.hpp>
+#else
 #include <memory>
-#include <sstream>
+#endif
 #include <string>
-#include <type_traits>
-#include <utility>
 #include <vector>
 
 // TCompactProtocol requires some #defines to work right.
@@ -34,21 +35,32 @@
 #define ARITHMETIC_RIGHT_SHIFT 1
 #include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h>
+#include <thrift/protocol/TDebugProtocol.h>
+
+#include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/transport/TBufferTransports.h>
+#include <sstream>
 
 #include "arrow/util/logging.h"
 
-#include "parquet/encryption/internal_file_decryptor.h"
-#include "parquet/encryption/internal_file_encryptor.h"
 #include "parquet/exception.h"
+#include "parquet/internal_file_decryptor.h"
+#include "parquet/internal_file_encryptor.h"
 #include "parquet/platform.h"
-#include "parquet/properties.h"
 #include "parquet/statistics.h"
 #include "parquet/types.h"
 
-#include "generated/parquet_types.h"  // IWYU pragma: export
+#include "generated/parquet_types.h"  // IYWU pragma: export
 
 namespace parquet {
+
+// Check if thrift version < 0.11.0
+// or if FORCE_BOOST_SMART_PTR is defined. Ref: https://thrift.apache.org/lib/cpp
+#if defined(PARQUET_THRIFT_USE_BOOST) || defined(FORCE_BOOST_SMART_PTR)
+using ::boost::shared_ptr;
+#else
+using ::std::shared_ptr;
+#endif
 
 // ----------------------------------------------------------------------
 // Convert Thrift enums to Parquet enums
@@ -89,8 +101,6 @@ static inline Compression::type FromThriftUnsafe(format::CompressionCodec::type 
     case format::CompressionCodec::BROTLI:
       return Compression::BROTLI;
     case format::CompressionCodec::LZ4:
-      return Compression::LZ4_HADOOP;
-    case format::CompressionCodec::LZ4_RAW:
       return Compression::LZ4;
     case format::CompressionCodec::ZSTD:
       return Compression::ZSTD;
@@ -98,10 +108,6 @@ static inline Compression::type FromThriftUnsafe(format::CompressionCodec::type 
       DCHECK(false) << "Cannot reach here";
       return Compression::UNCOMPRESSED;
   }
-}
-
-static inline BoundaryOrder::type FromThriftUnsafe(format::BoundaryOrder::type type) {
-  return static_cast<BoundaryOrder::type>(type);
 }
 
 namespace internal {
@@ -132,11 +138,6 @@ struct ThriftEnumTypeTraits<::parquet::format::Encoding::type> {
 template <>
 struct ThriftEnumTypeTraits<::parquet::format::PageType::type> {
   using ParquetEnum = PageType;
-};
-
-template <>
-struct ThriftEnumTypeTraits<::parquet::format::BoundaryOrder::type> {
-  using ParquetEnum = BoundaryOrder;
 };
 
 // If the parquet file is corrupted it is possible the enum value decoded
@@ -211,8 +212,7 @@ inline typename Compression::type LoadEnumSafe(const format::CompressionCodec::t
   // as format::CompressionCodec.
   const auto min_value =
       static_cast<decltype(raw_value)>(format::CompressionCodec::UNCOMPRESSED);
-  const auto max_value =
-      static_cast<decltype(raw_value)>(format::CompressionCodec::LZ4_RAW);
+  const auto max_value = static_cast<decltype(raw_value)>(format::CompressionCodec::ZSTD);
   if (raw_value < min_value || raw_value > max_value) {
     return Compression::UNCOMPRESSED;
   }
@@ -246,14 +246,6 @@ static inline EncryptionAlgorithm FromThrift(format::EncryptionAlgorithm encrypt
   return encryption_algorithm;
 }
 
-static inline SortingColumn FromThrift(format::SortingColumn thrift_sorting_column) {
-  SortingColumn sorting_column;
-  sorting_column.column_idx = thrift_sorting_column.column_idx;
-  sorting_column.nulls_first = thrift_sorting_column.nulls_first;
-  sorting_column.descending = thrift_sorting_column.descending;
-  return sorting_column;
-}
-
 // ----------------------------------------------------------------------
 // Convert Thrift enums from Parquet enums
 
@@ -264,9 +256,6 @@ static inline format::Type::type ToThrift(Type::type type) {
 static inline format::ConvertedType::type ToThrift(ConvertedType::type type) {
   // item 0 is NONE
   DCHECK_NE(type, ConvertedType::NONE);
-  // it is forbidden to emit "NA" (PARQUET-1990)
-  DCHECK_NE(type, ConvertedType::NA);
-  DCHECK_NE(type, ConvertedType::UNDEFINED);
   return static_cast<format::ConvertedType::type>(static_cast<int>(type) - 1);
 }
 
@@ -291,9 +280,6 @@ static inline format::CompressionCodec::type ToThrift(Compression::type type) {
     case Compression::BROTLI:
       return format::CompressionCodec::BROTLI;
     case Compression::LZ4:
-      return format::CompressionCodec::LZ4_RAW;
-    case Compression::LZ4_HADOOP:
-      // Deprecated "LZ4" Parquet compression has Hadoop-specific framing
       return format::CompressionCodec::LZ4;
     case Compression::ZSTD:
       return format::CompressionCodec::ZSTD;
@@ -301,26 +287,6 @@ static inline format::CompressionCodec::type ToThrift(Compression::type type) {
       DCHECK(false) << "Cannot reach here";
       return format::CompressionCodec::UNCOMPRESSED;
   }
-}
-
-static inline format::BoundaryOrder::type ToThrift(BoundaryOrder::type type) {
-  switch (type) {
-    case BoundaryOrder::Unordered:
-    case BoundaryOrder::Ascending:
-    case BoundaryOrder::Descending:
-      return static_cast<format::BoundaryOrder::type>(type);
-    default:
-      DCHECK(false) << "Cannot reach here";
-      return format::BoundaryOrder::UNORDERED;
-  }
-}
-
-static inline format::SortingColumn ToThrift(SortingColumn sorting_column) {
-  format::SortingColumn thrift_sorting_column;
-  thrift_sorting_column.column_idx = sorting_column.column_idx;
-  thrift_sorting_column.descending = sorting_column.descending;
-  thrift_sorting_column.nulls_first = sorting_column.nulls_first;
-  return thrift_sorting_column;
 }
 
 static inline format::Statistics ToThrift(const EncodedStatistics& stats) {
@@ -388,83 +354,57 @@ static inline format::EncryptionAlgorithm ToThrift(EncryptionAlgorithm encryptio
 
 using ThriftBuffer = apache::thrift::transport::TMemoryBuffer;
 
-class ThriftDeserializer {
- public:
-  explicit ThriftDeserializer(const ReaderProperties& properties)
-      : ThriftDeserializer(properties.thrift_string_size_limit(),
-                           properties.thrift_container_size_limit()) {}
+template <class T>
+inline void DeserializeThriftUnencryptedMsg(const uint8_t* buf, uint32_t* len,
+                                            T* deserialized_msg) {
+  // Deserialize msg bytes into c++ thrift msg using memory transport.
+  shared_ptr<ThriftBuffer> tmem_transport(
+      new ThriftBuffer(const_cast<uint8_t*>(buf), *len));
+  apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer> tproto_factory;
+  // Protect against CPU and memory bombs
+  tproto_factory.setStringSizeLimit(100 * 1000 * 1000);
+  tproto_factory.setContainerSizeLimit(10 * 1000 * 1000);
+  shared_ptr<apache::thrift::protocol::TProtocol> tproto =  //
+      tproto_factory.getProtocol(tmem_transport);
+  try {
+    deserialized_msg->read(tproto.get());
+  } catch (std::exception& e) {
+    std::stringstream ss;
+    ss << "Couldn't deserialize thrift: " << e.what() << "\n";
+    throw ParquetException(ss.str());
+  }
+  uint32_t bytes_left = tmem_transport->available_read();
+  *len = *len - bytes_left;
+}
 
-  ThriftDeserializer(int32_t string_size_limit, int32_t container_size_limit)
-      : string_size_limit_(string_size_limit),
-        container_size_limit_(container_size_limit) {}
-
-  // Deserialize a thrift message from buf/len.  buf/len must at least contain
-  // all the bytes needed to store the thrift message.  On return, len will be
-  // set to the actual length of the header.
-  template <class T>
-  void DeserializeMessage(const uint8_t* buf, uint32_t* len, T* deserialized_msg,
-                          Decryptor* decryptor = NULLPTR) {
-    if (decryptor == NULLPTR) {
-      // thrift message is not encrypted
-      DeserializeUnencryptedMessage(buf, len, deserialized_msg);
-    } else {
-      // thrift message is encrypted
-      uint32_t clen;
-      clen = *len;
-      // decrypt
-      auto decrypted_buffer = std::static_pointer_cast<ResizableBuffer>(
-          AllocateBuffer(decryptor->pool(),
-                         static_cast<int64_t>(clen - decryptor->CiphertextSizeDelta())));
-      const uint8_t* cipher_buf = buf;
-      uint32_t decrypted_buffer_len =
-          decryptor->Decrypt(cipher_buf, 0, decrypted_buffer->mutable_data());
-      if (decrypted_buffer_len <= 0) {
-        throw ParquetException("Couldn't decrypt buffer\n");
-      }
-      *len = decrypted_buffer_len + decryptor->CiphertextSizeDelta();
-      DeserializeUnencryptedMessage(decrypted_buffer->data(), &decrypted_buffer_len,
-                                    deserialized_msg);
+// Deserialize a thrift message from buf/len.  buf/len must at least contain
+// all the bytes needed to store the thrift message.  On return, len will be
+// set to the actual length of the header.
+template <class T>
+inline void DeserializeThriftMsg(const uint8_t* buf, uint32_t* len, T* deserialized_msg,
+                                 const std::shared_ptr<Decryptor>& decryptor = NULLPTR) {
+  // thrift message is not encrypted
+  if (decryptor == NULLPTR) {
+    DeserializeThriftUnencryptedMsg(buf, len, deserialized_msg);
+  } else {  // thrift message is encrypted
+    uint32_t clen;
+    clen = *len;
+    // decrypt
+    std::shared_ptr<ResizableBuffer> decrypted_buffer =
+        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
+            decryptor->pool(),
+            static_cast<int64_t>(clen - decryptor->CiphertextSizeDelta())));
+    const uint8_t* cipher_buf = buf;
+    uint32_t decrypted_buffer_len =
+        decryptor->Decrypt(cipher_buf, 0, decrypted_buffer->mutable_data());
+    if (decrypted_buffer_len <= 0) {
+      throw ParquetException("Couldn't decrypt buffer\n");
     }
+    *len = decrypted_buffer_len + decryptor->CiphertextSizeDelta();
+    DeserializeThriftMsg(decrypted_buffer->data(), &decrypted_buffer_len,
+                         deserialized_msg);
   }
-
- private:
-  // On Thrift 0.14.0+, we want to use TConfiguration to raise the max message size
-  // limit (ARROW-13655).  If we wanted to protect against huge messages, we could
-  // do it ourselves since we know the message size up front.
-  std::shared_ptr<ThriftBuffer> CreateReadOnlyMemoryBuffer(uint8_t* buf, uint32_t len) {
-#if PARQUET_THRIFT_VERSION_MAJOR > 0 || PARQUET_THRIFT_VERSION_MINOR >= 14
-    auto conf = std::make_shared<apache::thrift::TConfiguration>();
-    conf->setMaxMessageSize(std::numeric_limits<int>::max());
-    return std::make_shared<ThriftBuffer>(buf, len, ThriftBuffer::OBSERVE, conf);
-#else
-    return std::make_shared<ThriftBuffer>(buf, len);
-#endif
-  }
-
-  template <class T>
-  void DeserializeUnencryptedMessage(const uint8_t* buf, uint32_t* len,
-                                     T* deserialized_msg) {
-    // Deserialize msg bytes into c++ thrift msg using memory transport.
-    auto tmem_transport = CreateReadOnlyMemoryBuffer(const_cast<uint8_t*>(buf), *len);
-    apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer> tproto_factory;
-    // Protect against CPU and memory bombs
-    tproto_factory.setStringSizeLimit(string_size_limit_);
-    tproto_factory.setContainerSizeLimit(container_size_limit_);
-    auto tproto = tproto_factory.getProtocol(tmem_transport);
-    try {
-      deserialized_msg->read(tproto.get());
-    } catch (std::exception& e) {
-      std::stringstream ss;
-      ss << "Couldn't deserialize thrift: " << e.what() << "\n";
-      throw ParquetException(ss.str());
-    }
-    uint32_t bytes_left = tmem_transport->available_read();
-    *len = *len - bytes_left;
-  }
-
-  const int32_t string_size_limit_;
-  const int32_t container_size_limit_;
-};
+}
 
 /// Utility class to serialize thrift objects to a binary format.  This object
 /// should be reused if possible to reuse the underlying memory.
@@ -495,7 +435,7 @@ class ThriftSerializer {
 
   template <class T>
   int64_t Serialize(const T* obj, ArrowOutputStream* out,
-                    Encryptor* encryptor = NULLPTR) {
+                    const std::shared_ptr<Encryptor>& encryptor = NULLPTR) {
     uint8_t* out_buffer;
     uint32_t out_length;
     SerializeToBuffer(obj, &out_length, &out_buffer);
@@ -523,10 +463,12 @@ class ThriftSerializer {
   }
 
   int64_t SerializeEncryptedObj(ArrowOutputStream* out, uint8_t* out_buffer,
-                                uint32_t out_length, Encryptor* encryptor) {
-    auto cipher_buffer = std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
-        encryptor->pool(),
-        static_cast<int64_t>(encryptor->CiphertextSizeDelta() + out_length)));
+                                uint32_t out_length,
+                                const std::shared_ptr<Encryptor>& encryptor) {
+    std::shared_ptr<ResizableBuffer> cipher_buffer =
+        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
+            encryptor->pool(),
+            static_cast<int64_t>(encryptor->CiphertextSizeDelta() + out_length)));
     int cipher_buffer_len =
         encryptor->Encrypt(out_buffer, out_length, cipher_buffer->mutable_data());
 
@@ -534,8 +476,8 @@ class ThriftSerializer {
     return static_cast<int64_t>(cipher_buffer_len);
   }
 
-  std::shared_ptr<ThriftBuffer> mem_buffer_;
-  std::shared_ptr<apache::thrift::protocol::TProtocol> protocol_;
+  shared_ptr<ThriftBuffer> mem_buffer_;
+  shared_ptr<apache::thrift::protocol::TProtocol> protocol_;
 };
 
 }  // namespace parquet

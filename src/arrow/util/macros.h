@@ -19,7 +19,6 @@
 
 #include <cstdint>
 
-#define ARROW_EXPAND(x) x
 #define ARROW_STRINGIFY(x) #x
 #define ARROW_CONCAT(x, y) x##y
 
@@ -48,29 +47,32 @@
 #define ARROW_PREDICT_FALSE(x) (__builtin_expect(!!(x), 0))
 #define ARROW_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
 #define ARROW_NORETURN __attribute__((noreturn))
-#define ARROW_NOINLINE __attribute__((noinline))
-#define ARROW_FORCE_INLINE __attribute__((always_inline))
 #define ARROW_PREFETCH(addr) __builtin_prefetch(addr)
 #elif defined(_MSC_VER)
 #define ARROW_NORETURN __declspec(noreturn)
-#define ARROW_NOINLINE __declspec(noinline)
-#define ARROW_FORCE_INLINE __declspec(forceinline)
 #define ARROW_PREDICT_FALSE(x) (x)
 #define ARROW_PREDICT_TRUE(x) (x)
 #define ARROW_PREFETCH(addr)
 #else
 #define ARROW_NORETURN
-#define ARROW_NOINLINE
-#define ARROW_FORCE_INLINE
 #define ARROW_PREDICT_FALSE(x) (x)
 #define ARROW_PREDICT_TRUE(x) (x)
 #define ARROW_PREFETCH(addr)
 #endif
 
-#if defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
-#define ARROW_RESTRICT __restrict
+#if (defined(__GNUC__) || defined(__APPLE__))
+#define ARROW_MUST_USE_RESULT __attribute__((warn_unused_result))
+#elif defined(_MSC_VER)
+#define ARROW_MUST_USE_RESULT
 #else
-#define ARROW_RESTRICT
+#define ARROW_MUST_USE_RESULT
+#endif
+
+#if defined(__clang__)
+// Only clang supports warn_unused_result as a type annotation.
+#define ARROW_MUST_USE_TYPE ARROW_MUST_USE_RESULT
+#else
+#define ARROW_MUST_USE_TYPE
 #endif
 
 // ----------------------------------------------------------------------
@@ -93,37 +95,21 @@
 // This macro takes an optional deprecation message
 #ifdef __COVERITY__
 #  define ARROW_DEPRECATED(...)
-#else
+#  define ARROW_DEPRECATED_USING(...)
+#elif __cplusplus > 201103L
 #  define ARROW_DEPRECATED(...) [[deprecated(__VA_ARGS__)]]
-#endif
-
-#ifdef __COVERITY__
-#  define ARROW_DEPRECATED_ENUM_VALUE(...)
+#  define ARROW_DEPRECATED_USING(...) ARROW_DEPRECATED(__VA_ARGS__)
 #else
-#  define ARROW_DEPRECATED_ENUM_VALUE(...) [[deprecated(__VA_ARGS__)]]
-#endif
-
-// clang-format on
-
-// Macros to disable deprecation warnings
-
-#ifdef __clang__
-#define ARROW_SUPPRESS_DEPRECATION_WARNING \
-  _Pragma("clang diagnostic push");        \
-  _Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
-#define ARROW_UNSUPPRESS_DEPRECATION_WARNING _Pragma("clang diagnostic pop")
-#elif defined(__GNUC__)
-#define ARROW_SUPPRESS_DEPRECATION_WARNING \
-  _Pragma("GCC diagnostic push");          \
-  _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
-#define ARROW_UNSUPPRESS_DEPRECATION_WARNING _Pragma("GCC diagnostic pop")
-#elif defined(_MSC_VER)
-#define ARROW_SUPPRESS_DEPRECATION_WARNING \
-  __pragma(warning(push)) __pragma(warning(disable : 4996))
-#define ARROW_UNSUPPRESS_DEPRECATION_WARNING __pragma(warning(pop))
-#else
-#define ARROW_SUPPRESS_DEPRECATION_WARNING
-#define ARROW_UNSUPPRESS_DEPRECATION_WARNING
+# ifdef __GNUC__
+#  define ARROW_DEPRECATED(...) __attribute__((deprecated(__VA_ARGS__)))
+#  define ARROW_DEPRECATED_USING(...) ARROW_DEPRECATED(__VA_ARGS__)
+# elif defined(_MSC_VER)
+#  define ARROW_DEPRECATED(...) __declspec(deprecated(__VA_ARGS__))
+#  define ARROW_DEPRECATED_USING(...)
+# else
+#  define ARROW_DEPRECATED(...)
+#  define ARROW_DEPRECATED_USING(...)
+# endif
 #endif
 
 // ----------------------------------------------------------------------
@@ -193,3 +179,4 @@
 
 #define FRIEND_TEST(test_case_name, test_name) \
   friend class test_case_name##_##test_name##_Test
+

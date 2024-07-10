@@ -19,13 +19,14 @@
 #include "gandiva/node.h"
 
 namespace gandiva {
-Result<std::shared_ptr<RandomGeneratorHolder>> RandomGeneratorHolder::Make(
-    const FunctionNode& node) {
+Status RandomGeneratorHolder::Make(const FunctionNode& node,
+                                   std::shared_ptr<RandomGeneratorHolder>* holder) {
   ARROW_RETURN_IF(node.children().size() > 1,
                   Status::Invalid("'random' function requires at most one parameter"));
 
   if (node.children().size() == 0) {
-    return std::shared_ptr<RandomGeneratorHolder>(new RandomGeneratorHolder());
+    *holder = std::shared_ptr<RandomGeneratorHolder>(new RandomGeneratorHolder());
+    return Status::OK();
   }
 
   auto literal = dynamic_cast<LiteralNode*>(node.children().at(0).get());
@@ -37,7 +38,8 @@ Result<std::shared_ptr<RandomGeneratorHolder>> RandomGeneratorHolder::Make(
       literal_type != arrow::Type::INT32,
       Status::Invalid("'random' function requires an int32 literal as parameter"));
 
-  return std::shared_ptr<RandomGeneratorHolder>(new RandomGeneratorHolder(
-      literal->is_null() ? 0 : std::get<int32_t>(literal->holder())));
+  *holder = std::shared_ptr<RandomGeneratorHolder>(new RandomGeneratorHolder(
+      literal->is_null() ? 0 : arrow::util::get<int32_t>(literal->holder())));
+  return Status::OK();
 }
 }  // namespace gandiva

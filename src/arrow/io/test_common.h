@@ -21,26 +21,25 @@
 #include <string>
 #include <vector>
 
-#include "arrow/io/interfaces.h"
-#include "arrow/testing/visibility.h"
 #include "arrow/type_fwd.h"
+#include "arrow/util/visibility.h"
 
 namespace arrow {
 namespace io {
 
 class MemoryMappedFile;
 
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 void AssertFileContents(const std::string& path, const std::string& contents);
 
-ARROW_TESTING_EXPORT bool FileExists(const std::string& path);
+ARROW_EXPORT bool FileExists(const std::string& path);
 
-ARROW_TESTING_EXPORT Status PurgeLocalFileFromOsCache(const std::string& path);
+ARROW_EXPORT bool FileIsClosed(int fd);
 
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 Status ZeroMemoryMap(MemoryMappedFile* file);
 
-class ARROW_TESTING_EXPORT MemoryMapFixture {
+class ARROW_EXPORT MemoryMapFixture {
  public:
   void TearDown();
 
@@ -53,14 +52,6 @@ class ARROW_TESTING_EXPORT MemoryMapFixture {
 
  private:
   std::vector<std::string> tmp_files_;
-};
-
-class ARROW_TESTING_EXPORT TrackedRandomAccessFile : public io::RandomAccessFile {
- public:
-  virtual int64_t num_reads() const = 0;
-  virtual int64_t bytes_read() const = 0;
-  virtual const std::vector<io::ReadRange>& get_read_ranges() const = 0;
-  static std::unique_ptr<TrackedRandomAccessFile> Make(io::RandomAccessFile* target);
 };
 
 }  // namespace io

@@ -21,7 +21,6 @@
 #include <numeric>
 #include <random>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "benchmark/benchmark.h"
@@ -29,17 +28,14 @@
 #include "arrow/builder.h"
 #include "arrow/memory_pool.h"
 #include "arrow/testing/gtest_util.h"
-#include "arrow/util/benchmark_util.h"
 #include "arrow/util/bit_util.h"
 #include "arrow/util/decimal.h"
+#include "arrow/util/string_view.h"
 
 namespace arrow {
 
-::arrow::BenchmarkMemoryTracker memory_tracker;
-
 using ValueType = int64_t;
 using VectorType = std::vector<ValueType>;
-
 constexpr int64_t kNumberOfElements = 256 * 512;
 
 static VectorType AlmostU8CompressibleVector() {
@@ -56,14 +52,13 @@ constexpr int64_t kRounds = 256;
 static VectorType kData = AlmostU8CompressibleVector();
 constexpr int64_t kBytesProcessPerRound = kNumberOfElements * sizeof(ValueType);
 constexpr int64_t kBytesProcessed = kRounds * kBytesProcessPerRound;
-constexpr int64_t kItemsProcessed = kRounds * kNumberOfElements;
 
 static const char* kBinaryString = "12345678";
-static std::string_view kBinaryView(kBinaryString);
+static arrow::util::string_view kBinaryView(kBinaryString);
 
 static void BuildIntArrayNoNulls(benchmark::State& state) {  // NOLINT non-const reference
   for (auto _ : state) {
-    Int64Builder builder(memory_tracker.memory_pool());
+    Int64Builder builder;
 
     for (int i = 0; i < kRounds; i++) {
       ABORT_NOT_OK(builder.AppendValues(kData.data(), kData.size(), nullptr));
@@ -74,13 +69,12 @@ static void BuildIntArrayNoNulls(benchmark::State& state) {  // NOLINT non-const
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildAdaptiveIntNoNulls(
     benchmark::State& state) {  // NOLINT non-const reference
   for (auto _ : state) {
-    AdaptiveIntBuilder builder(memory_tracker.memory_pool());
+    AdaptiveIntBuilder builder;
 
     for (int i = 0; i < kRounds; i++) {
       ABORT_NOT_OK(builder.AppendValues(kData.data(), kData.size(), nullptr));
@@ -91,13 +85,12 @@ static void BuildAdaptiveIntNoNulls(
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildAdaptiveIntNoNullsScalarAppend(
     benchmark::State& state) {  // NOLINT non-const reference
   for (auto _ : state) {
-    AdaptiveIntBuilder builder(memory_tracker.memory_pool());
+    AdaptiveIntBuilder builder;
 
     for (int i = 0; i < kRounds; i++) {
       for (size_t j = 0; j < kData.size(); j++) {
@@ -110,7 +103,6 @@ static void BuildAdaptiveIntNoNullsScalarAppend(
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildBooleanArrayNoNulls(
@@ -120,7 +112,7 @@ static void BuildBooleanArrayNoNulls(
   const uint8_t* data = reinterpret_cast<const uint8_t*>(kData.data());
 
   for (auto _ : state) {
-    BooleanBuilder builder(memory_tracker.memory_pool());
+    BooleanBuilder builder;
 
     for (int i = 0; i < kRounds; i++) {
       ABORT_NOT_OK(builder.AppendValues(data, n_bytes));
@@ -131,12 +123,11 @@ static void BuildBooleanArrayNoNulls(
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildBinaryArray(benchmark::State& state) {  // NOLINT non-const reference
   for (auto _ : state) {
-    BinaryBuilder builder(memory_tracker.memory_pool());
+    BinaryBuilder builder;
 
     for (int64_t i = 0; i < kRounds * kNumberOfElements; i++) {
       ABORT_NOT_OK(builder.Append(kBinaryView));
@@ -147,7 +138,6 @@ static void BuildBinaryArray(benchmark::State& state) {  // NOLINT non-const ref
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildChunkedBinaryArray(
@@ -156,7 +146,7 @@ static void BuildChunkedBinaryArray(
   const int32_t kChunkSize = 1 << 20;
 
   for (auto _ : state) {
-    internal::ChunkedBinaryBuilder builder(kChunkSize, memory_tracker.memory_pool());
+    internal::ChunkedBinaryBuilder builder(kChunkSize);
 
     for (int64_t i = 0; i < kRounds * kNumberOfElements; i++) {
       ABORT_NOT_OK(builder.Append(kBinaryView));
@@ -167,7 +157,6 @@ static void BuildChunkedBinaryArray(
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildFixedSizeBinaryArray(
@@ -175,7 +164,7 @@ static void BuildFixedSizeBinaryArray(
   auto type = fixed_size_binary(static_cast<int32_t>(kBinaryView.size()));
 
   for (auto _ : state) {
-    FixedSizeBinaryBuilder builder(type, memory_tracker.memory_pool());
+    FixedSizeBinaryBuilder builder(type);
 
     for (int64_t i = 0; i < kRounds * kNumberOfElements; i++) {
       ABORT_NOT_OK(builder.Append(kBinaryView));
@@ -186,7 +175,6 @@ static void BuildFixedSizeBinaryArray(
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 static void BuildDecimalArray(benchmark::State& state) {  // NOLINT non-const reference
@@ -196,7 +184,7 @@ static void BuildDecimalArray(benchmark::State& state) {  // NOLINT non-const re
   int32_t scale = 0;
   ABORT_NOT_OK(Decimal128::FromString("1234.1234", &value, &precision, &scale));
   for (auto _ : state) {
-    Decimal128Builder builder(type, memory_tracker.memory_pool());
+    Decimal128Builder builder(type);
 
     for (int64_t i = 0; i < kRounds * kNumberOfElements; i++) {
       ABORT_NOT_OK(builder.Append(value));
@@ -207,7 +195,6 @@ static void BuildDecimalArray(benchmark::State& state) {  // NOLINT non-const re
   }
 
   state.SetBytesProcessed(state.iterations() * kRounds * kNumberOfElements * 16);
-  state.SetItemsProcessed(state.iterations() * kRounds * kNumberOfElements);
 }
 
 // ----------------------------------------------------------------------
@@ -240,7 +227,7 @@ static std::vector<Integer> MakeSimilarIntDictFodder() {
     std::uniform_int_distribution<Integer> values_dist(0, kDistinctElements - 1);
     auto max_int = std::numeric_limits<Integer>::max();
     auto multiplier =
-        static_cast<Integer>(bit_util::NextPower2(max_int / kDistinctElements / 2));
+        static_cast<Integer>(BitUtil::NextPower2(max_int / kDistinctElements / 2));
     std::generate(values.begin(), values.end(),
                   [&]() { return multiplier * values_dist(gen); });
   }
@@ -310,7 +297,7 @@ static void BenchmarkDictionaryArray(
     benchmark::State& state,  // NOLINT non-const reference
     const std::vector<Scalar>& fodder, size_t fodder_nbytes = 0) {
   for (auto _ : state) {
-    DictionaryBuilderType builder(memory_tracker.memory_pool());
+    DictionaryBuilderType builder(default_memory_pool());
 
     for (int64_t i = 0; i < kRounds; i++) {
       for (const auto& value : fodder) {
@@ -326,7 +313,6 @@ static void BenchmarkDictionaryArray(
     fodder_nbytes = fodder.size() * sizeof(Scalar);
   }
   state.SetBytesProcessed(state.iterations() * fodder_nbytes * kRounds);
-  state.SetItemsProcessed(state.iterations() * fodder.size() * kRounds);
 }
 
 static void BuildInt64DictionaryArrayRandom(
@@ -371,7 +357,6 @@ static void ArrayDataConstructDestruct(
     InitArrays();
     arrays.clear();
   }
-  state.SetItemsProcessed(state.iterations() * kNumArrays);
 }
 
 // ----------------------------------------------------------------------
@@ -385,7 +370,7 @@ static void BenchmarkBufferBuilder(
   // Write approx. 256 MB to BufferBuilder
   int64_t num_raw_values = (1 << 28) / raw_nbytes;
   for (auto _ : state) {
-    BufferBuilder builder(memory_tracker.memory_pool());
+    BufferBuilder builder;
     std::shared_ptr<Buffer> buf;
     for (int64_t i = 0; i < num_raw_values; ++i) {
       ABORT_NOT_OK(builder.Append(raw_data, raw_nbytes));
@@ -441,7 +426,6 @@ static void ReferenceBuildVectorNoNulls(
   }
 
   state.SetBytesProcessed(state.iterations() * kBytesProcessed);
-  state.SetItemsProcessed(state.iterations() * kItemsProcessed);
 }
 
 BENCHMARK(ReferenceBuildVectorNoNulls);

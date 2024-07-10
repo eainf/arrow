@@ -37,7 +37,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "arrow/util/basic_decimal.h"
 
 #ifndef _WIN32
 #include <dlfcn.h>
@@ -52,27 +51,53 @@ namespace arrow {
 
 using internal::GetEnvVarNative;
 using internal::PlatformFilename;
+#ifdef _WIN32
+using internal::WinErrorMessage;
+#endif
 
-namespace io::internal {
+namespace io {
+namespace internal {
 
 namespace {
 
-template <bool Required, typename T>
-Status SetSymbol(void* handle, char const* name, T** symbol) {
-  if (*symbol != nullptr) return Status::OK();
+void* GetLibrarySymbol(LibraryHandle handle, const char* symbol) {
+  if (handle == NULL) return NULL;
+#ifndef _WIN32
+  return dlsym(handle, symbol);
+#else
 
-  auto maybe_symbol = ::arrow::internal::GetSymbolAs<T>(handle, name);
-  if (Required || maybe_symbol.ok()) {
-    ARROW_ASSIGN_OR_RAISE(*symbol, maybe_symbol);
+  void* ret = reinterpret_cast<void*>(GetProcAddress(handle, symbol));
+  if (ret == NULL) {
+    // logstream(LOG_INFO) << "GetProcAddress error: "
+    //                     << get_last_err_str(GetLastError()) << std::endl;
   }
-  return Status::OK();
+  return ret;
+#endif
 }
 
-#define GET_SYMBOL_REQUIRED(SHIM, SYMBOL_NAME) \
-  RETURN_NOT_OK(SetSymbol<true>(SHIM->handle, #SYMBOL_NAME, &SHIM->SYMBOL_NAME));
+#define GET_SYMBOL_REQUIRED(SHIM, SYMBOL_NAME)                         \
+  do {                                                                 \
+    if (!SHIM->SYMBOL_NAME) {                                          \
+      *reinterpret_cast<void**>(&SHIM->SYMBOL_NAME) =                  \
+          GetLibrarySymbol(SHIM->handle, "" #SYMBOL_NAME);             \
+    }                                                                  \
+    if (!SHIM->SYMBOL_NAME)                                            \
+      return Status::IOError("Getting symbol " #SYMBOL_NAME "failed"); \
+  } while (0)
 
-#define GET_SYMBOL(SHIM, SYMBOL_NAME) \
-  DCHECK_OK(SetSymbol<false>(SHIM->handle, #SYMBOL_NAME, &SHIM->SYMBOL_NAME));
+#define GET_SYMBOL(SHIM, SYMBOL_NAME)                    \
+  if (!SHIM->SYMBOL_NAME) {                              \
+    *reinterpret_cast<void**>(&SHIM->SYMBOL_NAME) =      \
+        GetLibrarySymbol(SHIM->handle, "" #SYMBOL_NAME); \
+  }
+
+LibraryHandle libjvm_handle = nullptr;
+
+// Helper functions for dlopens
+Result<std::vector<PlatformFilename>> get_potential_libjvm_paths();
+Result<std::vector<PlatformFilename>> get_potential_libhdfs_paths();
+Result<LibraryHandle> try_dlopen(const std::vector<PlatformFilename>& potential_paths,
+                                 const char* name);
 
 Result<std::vector<PlatformFilename>> MakeFilenameVector(
     const std::vector<std::string>& names) {
@@ -148,7 +173,7 @@ Result<std::vector<PlatformFilename>> get_potential_libjvm_paths() {
   std::string file_name;
 
 // From heuristics
-#ifdef _WIN32
+#ifdef __WIN32
   ARROW_ASSIGN_OR_RAISE(search_prefixes, MakeFilenameVector({""}));
   ARROW_ASSIGN_OR_RAISE(search_suffixes,
                         MakeFilenameVector({"/jre/bin/server", "/bin/server"}));
@@ -162,46 +187,35 @@ Result<std::vector<PlatformFilename>> get_potential_libjvm_paths() {
 // SFrame uses /usr/libexec/java_home to find JAVA_HOME; for now we are
 // expecting users to set an environment variable
 #else
-#if defined(__aarch64__)
-  const std::string prefix_arch{"arm64"};
-  const std::string suffix_arch{"aarch64"};
-#else
-  const std::string prefix_arch{"amd64"};
-  const std::string suffix_arch{"amd64"};
-#endif
   ARROW_ASSIGN_OR_RAISE(
       search_prefixes,
       MakeFilenameVector({
-          "/usr/lib/jvm/default-java",        // ubuntu / debian distros
-          "/usr/lib/jvm/java",                // rhel6
-          "/usr/lib/jvm",                     // centos6
-          "/usr/lib64/jvm",                   // opensuse 13
-          "/usr/local/lib/jvm/default-java",  // alt ubuntu / debian distros
-          "/usr/local/lib/jvm/java",          // alt rhel6
-          "/usr/local/lib/jvm",               // alt centos6
-          "/usr/local/lib64/jvm",             // alt opensuse 13
-          "/usr/local/lib/jvm/java-8-openjdk-" +
-              prefix_arch,                               // alt ubuntu / debian distros
-          "/usr/lib/jvm/java-8-openjdk-" + prefix_arch,  // alt ubuntu / debian distros
-          "/usr/local/lib/jvm/java-7-openjdk-" +
-              prefix_arch,                               // alt ubuntu / debian distros
-          "/usr/lib/jvm/java-7-openjdk-" + prefix_arch,  // alt ubuntu / debian distros
-          "/usr/local/lib/jvm/java-6-openjdk-" +
-              prefix_arch,                               // alt ubuntu / debian distros
-          "/usr/lib/jvm/java-6-openjdk-" + prefix_arch,  // alt ubuntu / debian distros
-          "/usr/lib/jvm/java-7-oracle",                  // alt ubuntu
-          "/usr/lib/jvm/java-8-oracle",                  // alt ubuntu
-          "/usr/lib/jvm/java-6-oracle",                  // alt ubuntu
-          "/usr/local/lib/jvm/java-7-oracle",            // alt ubuntu
-          "/usr/local/lib/jvm/java-8-oracle",            // alt ubuntu
-          "/usr/local/lib/jvm/java-6-oracle",            // alt ubuntu
-          "/usr/lib/jvm/default",                        // alt centos
-          "/usr/java/latest"                             // alt centos
+          "/usr/lib/jvm/default-java",                // ubuntu / debian distros
+          "/usr/lib/jvm/java",                        // rhel6
+          "/usr/lib/jvm",                             // centos6
+          "/usr/lib64/jvm",                           // opensuse 13
+          "/usr/local/lib/jvm/default-java",          // alt ubuntu / debian distros
+          "/usr/local/lib/jvm/java",                  // alt rhel6
+          "/usr/local/lib/jvm",                       // alt centos6
+          "/usr/local/lib64/jvm",                     // alt opensuse 13
+          "/usr/local/lib/jvm/java-8-openjdk-amd64",  // alt ubuntu / debian distros
+          "/usr/lib/jvm/java-8-openjdk-amd64",        // alt ubuntu / debian distros
+          "/usr/local/lib/jvm/java-7-openjdk-amd64",  // alt ubuntu / debian distros
+          "/usr/lib/jvm/java-7-openjdk-amd64",        // alt ubuntu / debian distros
+          "/usr/local/lib/jvm/java-6-openjdk-amd64",  // alt ubuntu / debian distros
+          "/usr/lib/jvm/java-6-openjdk-amd64",        // alt ubuntu / debian distros
+          "/usr/lib/jvm/java-7-oracle",               // alt ubuntu
+          "/usr/lib/jvm/java-8-oracle",               // alt ubuntu
+          "/usr/lib/jvm/java-6-oracle",               // alt ubuntu
+          "/usr/local/lib/jvm/java-7-oracle",         // alt ubuntu
+          "/usr/local/lib/jvm/java-8-oracle",         // alt ubuntu
+          "/usr/local/lib/jvm/java-6-oracle",         // alt ubuntu
+          "/usr/lib/jvm/default",                     // alt centos
+          "/usr/java/latest",                         // alt centos
       }));
-  ARROW_ASSIGN_OR_RAISE(
-      search_suffixes,
-      MakeFilenameVector({"", "/lib/server", "/jre/lib/" + suffix_arch + "/server",
-                          "/lib/" + suffix_arch + "/server"}));
+  ARROW_ASSIGN_OR_RAISE(search_suffixes,
+                        MakeFilenameVector({"", "/jre/lib/amd64/server",
+                                            "/lib/amd64/server", "/lib/server"}));
   file_name = "libjvm.so";
 #endif
 
@@ -219,18 +233,46 @@ Result<std::vector<PlatformFilename>> get_potential_libjvm_paths() {
   return potential_paths;
 }
 
-Result<void*> try_dlopen(const std::vector<PlatformFilename>& potential_paths,
-                         std::string name) {
-  std::string error_message = "Unable to load " + name;
+#ifndef _WIN32
+Result<LibraryHandle> try_dlopen(const std::vector<PlatformFilename>& potential_paths,
+                                 const char* name) {
+  std::string error_message = "unknown error";
+  LibraryHandle handle;
 
   for (const auto& p : potential_paths) {
-    auto maybe_handle = arrow::internal::LoadDynamicLibrary(p);
-    if (maybe_handle.ok()) return *maybe_handle;
-    error_message += "\n" + maybe_handle.status().message();
+    handle = dlopen(p.ToNative().c_str(), RTLD_NOW | RTLD_LOCAL);
+
+    if (handle != NULL) {
+      return handle;
+    } else {
+      const char* err_msg = dlerror();
+      if (err_msg != NULL) {
+        error_message = err_msg;
+      }
+    }
   }
 
-  return Status(StatusCode::IOError, std::move(error_message));
+  return Status::IOError("Unable to load ", name, ": ", error_message);
 }
+
+#else
+Result<LibraryHandle> try_dlopen(const std::vector<PlatformFilename>& potential_paths,
+                                 const char* name) {
+  std::string error_message;
+  LibraryHandle handle;
+
+  for (const auto& p : potential_paths) {
+    handle = LoadLibraryW(p.ToNative().c_str());
+    if (handle != NULL) {
+      return handle;
+    } else {
+      error_message = WinErrorMessage(GetLastError());
+    }
+  }
+
+  return Status::IOError("Unable to load ", name, ": ", error_message);
+}
+#endif  // _WIN32
 
 LibHdfsShim libhdfs_shim;
 
@@ -282,7 +324,7 @@ Status ConnectLibHdfs(LibHdfsShim** driver) {
     shim->Initialize();
 
     ARROW_ASSIGN_OR_RAISE(auto libjvm_potential_paths, get_potential_libjvm_paths());
-    RETURN_NOT_OK(try_dlopen(libjvm_potential_paths, "libjvm"));
+    ARROW_ASSIGN_OR_RAISE(libjvm_handle, try_dlopen(libjvm_potential_paths, "libjvm"));
 
     ARROW_ASSIGN_OR_RAISE(auto libhdfs_potential_paths, get_potential_libhdfs_paths());
     ARROW_ASSIGN_OR_RAISE(shim->handle, try_dlopen(libhdfs_potential_paths, "libhdfs"));
@@ -297,7 +339,7 @@ Status ConnectLibHdfs(LibHdfsShim** driver) {
 ///////////////////////////////////////////////////////////////////////////
 // HDFS thin wrapper methods
 
-hdfsBuilder* LibHdfsShim::NewBuilder() { return this->hdfsNewBuilder(); }
+hdfsBuilder* LibHdfsShim::NewBuilder(void) { return this->hdfsNewBuilder(); }
 
 void LibHdfsShim::BuilderSetNameNode(hdfsBuilder* bld, const char* nn) {
   this->hdfsBuilderSetNameNode(bld, nn);
@@ -373,29 +415,26 @@ int LibHdfsShim::Flush(hdfsFS fs, hdfsFile file) { return this->hdfsFlush(fs, fi
 
 int LibHdfsShim::Available(hdfsFS fs, hdfsFile file) {
   GET_SYMBOL(this, hdfsAvailable);
-  if (this->hdfsAvailable) {
+  if (this->hdfsAvailable)
     return this->hdfsAvailable(fs, file);
-  } else {
+  else
     return 0;
-  }
 }
 
 int LibHdfsShim::Copy(hdfsFS srcFS, const char* src, hdfsFS dstFS, const char* dst) {
   GET_SYMBOL(this, hdfsCopy);
-  if (this->hdfsCopy) {
+  if (this->hdfsCopy)
     return this->hdfsCopy(srcFS, src, dstFS, dst);
-  } else {
+  else
     return 0;
-  }
 }
 
 int LibHdfsShim::Move(hdfsFS srcFS, const char* src, hdfsFS dstFS, const char* dst) {
   GET_SYMBOL(this, hdfsMove);
-  if (this->hdfsMove) {
+  if (this->hdfsMove)
     return this->hdfsMove(srcFS, src, dstFS, dst);
-  } else {
+  else
     return 0;
-  }
 }
 
 int LibHdfsShim::Delete(hdfsFS fs, const char* path, int recursive) {
@@ -404,11 +443,10 @@ int LibHdfsShim::Delete(hdfsFS fs, const char* path, int recursive) {
 
 int LibHdfsShim::Rename(hdfsFS fs, const char* oldPath, const char* newPath) {
   GET_SYMBOL(this, hdfsRename);
-  if (this->hdfsRename) {
+  if (this->hdfsRename)
     return this->hdfsRename(fs, oldPath, newPath);
-  } else {
+  else
     return 0;
-  }
 }
 
 char* LibHdfsShim::GetWorkingDirectory(hdfsFS fs, char* buffer, size_t bufferSize) {
@@ -416,7 +454,7 @@ char* LibHdfsShim::GetWorkingDirectory(hdfsFS fs, char* buffer, size_t bufferSiz
   if (this->hdfsGetWorkingDirectory) {
     return this->hdfsGetWorkingDirectory(fs, buffer, bufferSize);
   } else {
-    return nullptr;
+    return NULL;
   }
 }
 
@@ -460,7 +498,7 @@ char*** LibHdfsShim::GetHosts(hdfsFS fs, const char* path, tOffset start,
   if (this->hdfsGetHosts) {
     return this->hdfsGetHosts(fs, path, start, length);
   } else {
-    return nullptr;
+    return NULL;
   }
 }
 
@@ -502,5 +540,6 @@ int LibHdfsShim::Utime(hdfsFS fs, const char* path, tTime mtime, tTime atime) {
   }
 }
 
-}  // namespace io::internal
+}  // namespace internal
+}  // namespace io
 }  // namespace arrow

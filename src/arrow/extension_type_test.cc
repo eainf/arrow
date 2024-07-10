@@ -16,25 +16,32 @@
 // under the License.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
+#include <limits>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <string>
+#include <type_traits>
+#include <vector>
 
 #include <gtest/gtest.h>
 
-#include "arrow/array/array_nested.h"
-#include "arrow/array/util.h"
+#include "arrow/array.h"
+#include "arrow/buffer.h"
+#include "arrow/buffer_builder.h"
 #include "arrow/extension_type.h"
 #include "arrow/io/memory.h"
-#include "arrow/ipc/options.h"
 #include "arrow/ipc/reader.h"
 #include "arrow/ipc/writer.h"
 #include "arrow/record_batch.h"
 #include "arrow/status.h"
 #include "arrow/testing/extension_type.h"
-#include "arrow/testing/gtest_util.h"
+#include "arrow/testing/gtest_common.h"
+#include "arrow/testing/util.h"
 #include "arrow/type.h"
 #include "arrow/util/key_value_metadata.h"
 #include "arrow/util/logging.h"
@@ -147,8 +154,7 @@ class ExtStructArray : public ExtensionArray {
 class ExtStructType : public ExtensionType {
  public:
   ExtStructType()
-      : ExtensionType(
-            struct_({::arrow::field("a", int64()), ::arrow::field("b", float64())})) {}
+      : ExtensionType(struct_({field("a", int64()), field("b", float64())})) {}
 
   std::string extension_name() const override { return "ext-struct-type"; }
 
@@ -178,7 +184,7 @@ class ExtStructType : public ExtensionType {
 
 class TestExtensionType : public ::testing::Test {
  public:
-  void SetUp() { ASSERT_OK(RegisterExtensionType(std::make_shared<UuidType>())); }
+  void SetUp() { ASSERT_OK(RegisterExtensionType(std::make_shared<UUIDType>())); }
 
   void TearDown() {
     if (GetExtensionType("uuid")) {
@@ -196,8 +202,6 @@ TEST_F(TestExtensionType, ExtensionTypeTest) {
 
   auto type = uuid();
   ASSERT_EQ(type->id(), Type::EXTENSION);
-  ASSERT_EQ(type->bit_width(), 128);
-  ASSERT_EQ(type->byte_width(), 16);
 
   const auto& ext_type = static_cast<const ExtensionType&>(*type);
   std::string serialized = ext_type.Serialize();
@@ -206,9 +210,6 @@ TEST_F(TestExtensionType, ExtensionTypeTest) {
                        ext_type.Deserialize(fixed_size_binary(16), serialized));
   ASSERT_TRUE(deserialized->Equals(*type));
   ASSERT_FALSE(deserialized->Equals(*fixed_size_binary(16)));
-  ASSERT_EQ(deserialized->id(), Type::EXTENSION);
-  ASSERT_EQ(deserialized->bit_width(), 128);
-  ASSERT_EQ(deserialized->byte_width(), 16);
 }
 
 auto RoundtripBatch = [](const std::shared_ptr<RecordBatch>& batch,
@@ -226,7 +227,7 @@ auto RoundtripBatch = [](const std::shared_ptr<RecordBatch>& batch,
 };
 
 TEST_F(TestExtensionType, IpcRoundtrip) {
-  auto ext_arr = ExampleUuid();
+  auto ext_arr = ExampleUUID();
   auto batch = RecordBatch::Make(schema({field("f0", uuid())}), 4, {ext_arr});
 
   std::shared_ptr<RecordBatch> read_batch;
@@ -242,7 +243,7 @@ TEST_F(TestExtensionType, IpcRoundtrip) {
 }
 
 TEST_F(TestExtensionType, UnrecognizedExtension) {
-  auto ext_arr = ExampleUuid();
+  auto ext_arr = ExampleUUID();
   auto batch = RecordBatch::Make(schema({field("f0", uuid())}), 4, {ext_arr});
 
   auto storage_arr = static_cast<const ExtensionArray&>(*ext_arr).storage();
@@ -258,7 +259,7 @@ TEST_F(TestExtensionType, UnrecognizedExtension) {
   ASSERT_OK(UnregisterExtensionType("uuid"));
   auto ext_metadata =
       key_value_metadata({{"ARROW:extension:name", "uuid"},
-                          {"ARROW:extension:metadata", "uuid-serialized"}});
+                          {"ARROW:extension:metadata", "uuid-type-unique-code"}});
   auto ext_field = field("f0", fixed_size_binary(16), true, ext_metadata);
   auto batch_no_ext = RecordBatch::Make(schema({ext_field}), 4, {storage_arr});
 
@@ -326,16 +327,14 @@ std::shared_ptr<Array> ExampleStruct() {
 }
 
 TEST_F(TestExtensionType, ValidateExtensionArray) {
-  auto ext_arr1 = ExampleUuid();
+  auto ext_arr1 = ExampleUUID();
   auto p1_type = std::make_shared<Parametric1Type>(6);
   auto ext_arr2 = ExampleParametric(p1_type, "[null, 1, 2, 3]");
   auto ext_arr3 = ExampleStruct();
-  auto ext_arr4 = ExampleComplex128();
 
   ASSERT_OK(ext_arr1->ValidateFull());
   ASSERT_OK(ext_arr2->ValidateFull());
   ASSERT_OK(ext_arr3->ValidateFull());
-  ASSERT_OK(ext_arr4->ValidateFull());
 }
 
 }  // namespace arrow

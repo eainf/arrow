@@ -18,14 +18,16 @@
 #include "arrow/array/builder_adaptive.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 
-#include "arrow/array/data.h"
+#include "arrow/array.h"
 #include "arrow/buffer.h"
-#include "arrow/buffer_builder.h"
-#include "arrow/result.h"
 #include "arrow/status.h"
 #include "arrow/type.h"
+#include "arrow/type_traits.h"
+#include "arrow/util/bit_util.h"
 #include "arrow/util/int_util.h"
 #include "arrow/util/logging.h"
 
@@ -33,11 +35,7 @@ namespace arrow {
 
 using internal::AdaptiveIntBuilderBase;
 
-AdaptiveIntBuilderBase::AdaptiveIntBuilderBase(uint8_t start_int_size, MemoryPool* pool,
-                                               int64_t alignment)
-    : ArrayBuilder(pool, alignment),
-      start_int_size_(start_int_size),
-      int_size_(start_int_size) {}
+AdaptiveIntBuilderBase::AdaptiveIntBuilderBase(MemoryPool* pool) : ArrayBuilder(pool) {}
 
 void AdaptiveIntBuilderBase::Reset() {
   ArrayBuilder::Reset();
@@ -45,7 +43,7 @@ void AdaptiveIntBuilderBase::Reset() {
   raw_data_ = nullptr;
   pending_pos_ = 0;
   pending_has_nulls_ = false;
-  int_size_ = start_int_size_;
+  int_size_ = sizeof(uint8_t);
 }
 
 Status AdaptiveIntBuilderBase::Resize(int64_t capacity) {
@@ -128,9 +126,7 @@ std::shared_ptr<DataType> AdaptiveIntBuilder::type() const {
   return nullptr;
 }
 
-AdaptiveIntBuilder::AdaptiveIntBuilder(uint8_t start_int_size, MemoryPool* pool,
-                                       int64_t alignment)
-    : AdaptiveIntBuilderBase(start_int_size, pool, alignment) {}
+AdaptiveIntBuilder::AdaptiveIntBuilder(MemoryPool* pool) : AdaptiveIntBuilderBase(pool) {}
 
 Status AdaptiveIntBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
   RETURN_NOT_OK(CommitPendingData());
@@ -139,13 +135,7 @@ Status AdaptiveIntBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
   RETURN_NOT_OK(null_bitmap_builder_.Finish(&null_bitmap));
   RETURN_NOT_OK(TrimBuffer(length_ * int_size_, data_.get()));
 
-  std::shared_ptr<Buffer> values_buffer = data_;
-  if (!values_buffer) {
-    ARROW_ASSIGN_OR_RAISE(values_buffer, AllocateBuffer(0, pool_));
-  }
-
-  *out = ArrayData::Make(type(), length_, {null_bitmap, std::move(values_buffer)},
-                         null_count_);
+  *out = ArrayData::Make(type(), length_, {null_bitmap, data_}, null_count_);
 
   data_ = nullptr;
   capacity_ = length_ = null_count_ = 0;
@@ -276,8 +266,8 @@ Status AdaptiveIntBuilder::ExpandIntSize(uint8_t new_int_size) {
   return Status::OK();
 }
 
-AdaptiveUIntBuilder::AdaptiveUIntBuilder(uint8_t start_int_size, MemoryPool* pool)
-    : AdaptiveIntBuilderBase(start_int_size, pool) {}
+AdaptiveUIntBuilder::AdaptiveUIntBuilder(MemoryPool* pool)
+    : AdaptiveIntBuilderBase(pool) {}
 
 Status AdaptiveUIntBuilder::FinishInternal(std::shared_ptr<ArrayData>* out) {
   RETURN_NOT_OK(CommitPendingData());

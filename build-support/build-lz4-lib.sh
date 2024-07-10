@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -17,16 +17,9 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-
-# mingw-w64-x86_64-make installs mingw32-make, not make
-MAKE="make"
-if [ -n "$MSYSTEM" ]; then
-  MAKE="mingw32-make"
-fi
-
 export CFLAGS="${CFLAGS} -O3 -fPIC"
 if [ -z "$MAKELEVEL" ]; then
-  "$MAKE" -j4 CFLAGS="$CFLAGS" "$@"
+  make -j4 CFLAGS="$CFLAGS" "$@"
 else
-  "$MAKE" CFLAGS="$CFLAGS" "$@"
+  make CFLAGS="$CFLAGS" "$@"
 fi

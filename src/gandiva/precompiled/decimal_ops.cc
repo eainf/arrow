@@ -23,10 +23,10 @@
 #include <cmath>
 #include <limits>
 
-#include "arrow/util/logging.h"
 #include "gandiva/decimal_type_util.h"
 #include "gandiva/decimal_xlarge.h"
 #include "gandiva/gdv_function_stubs.h"
+#include "gandiva/logging.h"
 
 // Several operations (multiply, divide, mod, ..) require converting to 256-bit, and we
 // use the boost library for doing 256-bit operations. To avoid references to boost from
@@ -401,7 +401,7 @@ BasicDecimal128 Mod(int64_t context, const BasicDecimalScalar128& x,
     return 0;
   }
 
-  // Adjust x and y to the same scale (higher one), and then, do a integer mod.
+  // Adsjust x and y to the same scale (higher one), and then, do a integer mod.
   *overflow = false;
   BasicDecimal128 result;
   int32_t min_lz = MinLeadingZeros(x, y);
@@ -559,7 +559,7 @@ enum RoundType {
                           // else if -ve and trailing value is >= half of base, -1.
 };
 
-// Compute the rounding delta for the given rounding type.
+// Compute the rounding delta for the givven rounding type.
 static int32_t ComputeRoundingDelta(const BasicDecimal128& x, int32_t x_scale,
                                     int32_t out_scale, RoundType type) {
   if (type == kRoundTypeTrunc ||  // no rounding for this type.
@@ -658,35 +658,24 @@ static BasicDecimal128 RoundWithNegativeScale(const BasicDecimalScalar128& x,
   return scaled + delta;
 }
 
-BasicDecimal128 Round(const BasicDecimalScalar128& x, int32_t out_precision,
-                      int32_t out_scale, int32_t rounding_scale, bool* overflow) {
-  // no-op if target scale is same as arg scale
-  if (x.scale() == out_scale && rounding_scale >= 0) {
-    return x.value();
-  }
-
-  if (rounding_scale < 0) {
-    return RoundWithNegativeScale(x, out_precision, rounding_scale,
+BasicDecimal128 Round(const BasicDecimalScalar128& x, int32_t out_scale, bool* overflow) {
+  if (out_scale < 0) {
+    return RoundWithNegativeScale(x, x.precision(), out_scale,
                                   RoundType::kRoundTypeHalfRoundUp, overflow);
   } else {
-    return RoundWithPositiveScale(x, out_precision, rounding_scale,
+    return RoundWithPositiveScale(x, x.precision(), out_scale,
                                   RoundType::kRoundTypeHalfRoundUp, overflow);
   }
 }
 
-BasicDecimal128 Truncate(const BasicDecimalScalar128& x, int32_t out_precision,
-                         int32_t out_scale, int32_t rounding_scale, bool* overflow) {
-  // no-op if target scale is same as arg scale
-  if (x.scale() == out_scale && rounding_scale >= 0) {
-    return x.value();
-  }
-
-  if (rounding_scale < 0) {
-    return RoundWithNegativeScale(x, out_precision, rounding_scale,
-                                  RoundType::kRoundTypeTrunc, overflow);
+BasicDecimal128 Truncate(const BasicDecimalScalar128& x, int32_t out_scale,
+                         bool* overflow) {
+  if (out_scale < 0) {
+    return RoundWithNegativeScale(x, x.precision(), out_scale, RoundType::kRoundTypeTrunc,
+                                  overflow);
   } else {
-    return RoundWithPositiveScale(x, out_precision, rounding_scale,
-                                  RoundType::kRoundTypeTrunc, overflow);
+    return RoundWithPositiveScale(x, x.precision(), out_scale, RoundType::kRoundTypeTrunc,
+                                  overflow);
   }
 }
 

@@ -20,8 +20,8 @@
 #include <memory>
 #include <utility>
 
-#include "arrow/array/array_base.h"
-#include "arrow/array/builder_base.h"
+#include "arrow/array.h"
+#include "arrow/builder.h"
 #include "arrow/record_batch.h"
 #include "arrow/status.h"
 #include "arrow/type.h"
@@ -36,21 +36,21 @@ RecordBatchBuilder::RecordBatchBuilder(const std::shared_ptr<Schema>& schema,
                                        MemoryPool* pool, int64_t initial_capacity)
     : schema_(schema), initial_capacity_(initial_capacity), pool_(pool) {}
 
-Result<std::unique_ptr<RecordBatchBuilder>> RecordBatchBuilder::Make(
-    const std::shared_ptr<Schema>& schema, MemoryPool* pool) {
-  return Make(schema, pool, kMinBuilderCapacity);
+Status RecordBatchBuilder::Make(const std::shared_ptr<Schema>& schema, MemoryPool* pool,
+                                std::unique_ptr<RecordBatchBuilder>* builder) {
+  return Make(schema, pool, kMinBuilderCapacity, builder);
 }
 
-Result<std::unique_ptr<RecordBatchBuilder>> RecordBatchBuilder::Make(
-    const std::shared_ptr<Schema>& schema, MemoryPool* pool, int64_t initial_capacity) {
-  auto builder = std::unique_ptr<RecordBatchBuilder>(
-      new RecordBatchBuilder(schema, pool, initial_capacity));
-  RETURN_NOT_OK(builder->CreateBuilders());
-  RETURN_NOT_OK(builder->InitBuilders());
-  return std::move(builder);
+Status RecordBatchBuilder::Make(const std::shared_ptr<Schema>& schema, MemoryPool* pool,
+                                int64_t initial_capacity,
+                                std::unique_ptr<RecordBatchBuilder>* builder) {
+  builder->reset(new RecordBatchBuilder(schema, pool, initial_capacity));
+  RETURN_NOT_OK((*builder)->CreateBuilders());
+  return (*builder)->InitBuilders();
 }
 
-Result<std::shared_ptr<RecordBatch>> RecordBatchBuilder::Flush(bool reset_builders) {
+Status RecordBatchBuilder::Flush(bool reset_builders,
+                                 std::shared_ptr<RecordBatch>* batch) {
   std::vector<std::shared_ptr<Array>> fields;
   fields.resize(this->num_fields());
 
@@ -62,31 +62,17 @@ Result<std::shared_ptr<RecordBatch>> RecordBatchBuilder::Flush(bool reset_builde
     }
     length = fields[i]->length();
   }
-
-  // For certain types like dictionaries, types may not be fully
-  // determined before we have flushed. Make sure that the RecordBatch
-  // gets the correct types in schema.
-  // See: #ARROW-9969
-  std::vector<std::shared_ptr<Field>> schema_fields(schema_->fields());
-  for (int i = 0; i < this->num_fields(); ++i) {
-    if (!schema_fields[i]->type()->Equals(fields[i]->type())) {
-      schema_fields[i] = schema_fields[i]->WithType(fields[i]->type());
-    }
-  }
-  std::shared_ptr<Schema> schema =
-      std::make_shared<Schema>(std::move(schema_fields), schema_->metadata());
-
-  std::shared_ptr<RecordBatch> batch =
-      RecordBatch::Make(std::move(schema), length, std::move(fields));
-
+  *batch = RecordBatch::Make(schema_, length, std::move(fields));
   if (reset_builders) {
-    ARROW_RETURN_NOT_OK(InitBuilders());
+    return InitBuilders();
+  } else {
+    return Status::OK();
   }
-
-  return batch;
 }
 
-Result<std::shared_ptr<RecordBatch>> RecordBatchBuilder::Flush() { return Flush(true); }
+Status RecordBatchBuilder::Flush(std::shared_ptr<RecordBatch>* batch) {
+  return Flush(true, batch);
+}
 
 void RecordBatchBuilder::SetInitialCapacity(int64_t capacity) {
   ARROW_CHECK_GT(capacity, 0) << "Initial capacity must be positive";

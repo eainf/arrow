@@ -76,17 +76,12 @@ class GANDIVA_EXPORT Filter {
   Status Evaluate(const arrow::RecordBatch& batch,
                   std::shared_ptr<SelectionVector> out_selection);
 
-  const std::string& DumpIR();
-
-  void SetBuiltFromCache(bool flag);
-
-  bool GetBuiltFromCache();
+  std::string DumpIR();
 
  private:
   std::unique_ptr<LLVMGenerator> llvm_generator_;
   SchemaPtr schema_;
   std::shared_ptr<Configuration> configuration_;
-  bool built_from_cache_;
 };
 
 }  // namespace gandiva

@@ -24,7 +24,6 @@
 
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/util.h"
-#include "arrow/util/bitmap_ops.h"
 
 #include "gandiva/dex.h"
 
@@ -33,7 +32,7 @@ namespace gandiva {
 class TestBitMapAccumulator : public ::testing::Test {
  protected:
   void FillBitMap(uint8_t* bmap, uint32_t seed, int nrecords);
-  void ByteWiseIntersectBitMaps(uint8_t* dst, const std::vector<const uint8_t*>& srcs,
+  void ByteWiseIntersectBitMaps(uint8_t* dst, const std::vector<uint8_t*>& srcs,
                                 const std::vector<int64_t>& srcOffsets, int nrecords);
 };
 
@@ -42,10 +41,10 @@ void TestBitMapAccumulator::FillBitMap(uint8_t* bmap, uint32_t seed, int nbytes)
 }
 
 void TestBitMapAccumulator::ByteWiseIntersectBitMaps(
-    uint8_t* dst, const std::vector<const uint8_t*>& srcs,
+    uint8_t* dst, const std::vector<uint8_t*>& srcs,
     const std::vector<int64_t>& srcOffsets, int nrecords) {
   if (srcs.empty()) {
-    arrow::bit_util::SetBitsTo(dst, 0, nrecords, true);
+    arrow::BitUtil::SetBitsTo(dst, 0, nrecords, true);
     return;
   }
 
@@ -67,7 +66,7 @@ TEST_F(TestBitMapAccumulator, TestIntersectBitMaps) {
   }
 
   for (int i = 0; i < 4; i++) {
-    std::vector<const uint8_t*> src_bitmap_ptrs;
+    std::vector<uint8_t*> src_bitmap_ptrs;
     std::vector<int64_t> src_bitmap_offsets(i, 0);
     for (int j = 0; j < i; ++j) {
       src_bitmap_ptrs.push_back(src_bitmaps[j]);
@@ -92,7 +91,7 @@ TEST_F(TestBitMapAccumulator, TestIntersectBitMapsWithOffset) {
   }
 
   for (int i = 0; i < 4; i++) {
-    std::vector<const uint8_t*> src_bitmap_ptrs;
+    std::vector<uint8_t*> src_bitmap_ptrs;
     std::vector<int64_t> src_bitmap_offsets;
     for (int j = 0; j < i; ++j) {
       src_bitmap_ptrs.push_back(src_bitmaps[j]);

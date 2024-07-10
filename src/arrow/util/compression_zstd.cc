@@ -173,19 +173,20 @@ class ZSTDCompressor : public Compressor {
 
 class ZSTDCodec : public Codec {
  public:
-  explicit ZSTDCodec(int compression_level)
-      : compression_level_(compression_level == kUseDefaultCompressionLevel
-                               ? kZSTDDefaultCompressionLevel
-                               : compression_level) {}
+  explicit ZSTDCodec(int compression_level) {
+    compression_level_ = compression_level == kUseDefaultCompressionLevel
+                             ? kZSTDDefaultCompressionLevel
+                             : compression_level;
+  }
 
   Result<int64_t> Decompress(int64_t input_len, const uint8_t* input,
                              int64_t output_buffer_len, uint8_t* output_buffer) override {
     if (output_buffer == nullptr) {
       // We may pass a NULL 0-byte output buffer but some zstd versions demand
       // a valid pointer: https://github.com/facebook/zstd/issues/1385
-      static uint8_t empty_buffer;
+      static uint8_t empty_buffer[1];
       DCHECK_EQ(output_buffer_len, 0);
-      output_buffer = &empty_buffer;
+      output_buffer = empty_buffer;
     }
 
     size_t ret = ZSTD_decompress(output_buffer, static_cast<size_t>(output_buffer_len),
@@ -227,21 +228,16 @@ class ZSTDCodec : public Codec {
     return ptr;
   }
 
-  Compression::type compression_type() const override { return Compression::ZSTD; }
-  int minimum_compression_level() const override { return ZSTD_minCLevel(); }
-  int maximum_compression_level() const override { return ZSTD_maxCLevel(); }
-  int default_compression_level() const override { return kZSTDDefaultCompressionLevel; }
-
-  int compression_level() const override { return compression_level_; }
+  const char* name() const override { return "zstd"; }
 
  private:
-  const int compression_level_;
+  int compression_level_;
 };
 
 }  // namespace
 
 std::unique_ptr<Codec> MakeZSTDCodec(int compression_level) {
-  return std::make_unique<ZSTDCodec>(compression_level);
+  return std::unique_ptr<Codec>(new ZSTDCodec(compression_level));
 }
 
 }  // namespace internal

@@ -17,39 +17,34 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "arrow/csv/parser.h"
-#include "arrow/testing/visibility.h"
+#include "arrow/util/visibility.h"
 
 namespace arrow {
 namespace csv {
 
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 std::string MakeCSVData(std::vector<std::string> lines);
 
 // Make a BlockParser from a vector of lines representing a CSV file
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 void MakeCSVParser(std::vector<std::string> lines, ParseOptions options, int32_t num_cols,
-                   MemoryPool* pool, std::shared_ptr<BlockParser>* out);
+                   std::shared_ptr<BlockParser>* out);
 
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 void MakeCSVParser(std::vector<std::string> lines, ParseOptions options,
                    std::shared_ptr<BlockParser>* out);
 
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 void MakeCSVParser(std::vector<std::string> lines, std::shared_ptr<BlockParser>* out);
 
 // Make a BlockParser from a vector of strings representing a single CSV column
-ARROW_TESTING_EXPORT
+ARROW_EXPORT
 void MakeColumnParser(std::vector<std::string> items, std::shared_ptr<BlockParser>* out);
-
-ARROW_TESTING_EXPORT
-Result<std::shared_ptr<Buffer>> MakeSampleCsvBuffer(
-    size_t num_rows, std::function<bool(size_t row_num)> is_valid = {});
 
 }  // namespace csv
 }  // namespace arrow

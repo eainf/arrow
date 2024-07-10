@@ -17,19 +17,10 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
+#include <assert.h>
 #include <string.h>
 
 #include "arrow/c/abi.h"
-
-#define ARROW_C_ASSERT(condition, msg)                          \
-  do {                                                          \
-    if (!(condition)) {                                         \
-      fprintf(stderr, "%s:%d:: %s", __FILE__, __LINE__, (msg)); \
-      abort();                                                  \
-    }                                                           \
-  } while (0)
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,8 +51,7 @@ inline void ArrowSchemaMove(struct ArrowSchema* src, struct ArrowSchema* dest) {
 inline void ArrowSchemaRelease(struct ArrowSchema* schema) {
   if (!ArrowSchemaIsReleased(schema)) {
     schema->release(schema);
-    ARROW_C_ASSERT(ArrowSchemaIsReleased(schema),
-                   "ArrowSchemaRelease did not cleanup release callback");
+    assert(ArrowSchemaIsReleased(schema));
   }
 }
 
@@ -88,39 +78,7 @@ inline void ArrowArrayMove(struct ArrowArray* src, struct ArrowArray* dest) {
 inline void ArrowArrayRelease(struct ArrowArray* array) {
   if (!ArrowArrayIsReleased(array)) {
     array->release(array);
-    ARROW_C_ASSERT(ArrowArrayIsReleased(array),
-                   "ArrowArrayRelease did not cleanup release callback");
-  }
-}
-
-/// Query whether the C array stream is released
-inline int ArrowArrayStreamIsReleased(const struct ArrowArrayStream* stream) {
-  return stream->release == NULL;
-}
-
-/// Mark the C array stream released (for use in release callbacks)
-inline void ArrowArrayStreamMarkReleased(struct ArrowArrayStream* stream) {
-  stream->release = NULL;
-}
-
-/// Move the C array stream from `src` to `dest`
-///
-/// Note `dest` must *not* point to a valid stream already, otherwise there
-/// will be a memory leak.
-inline void ArrowArrayStreamMove(struct ArrowArrayStream* src,
-                                 struct ArrowArrayStream* dest) {
-  assert(dest != src);
-  assert(!ArrowArrayStreamIsReleased(src));
-  memcpy(dest, src, sizeof(struct ArrowArrayStream));
-  ArrowArrayStreamMarkReleased(src);
-}
-
-/// Release the C array stream, if necessary, by calling its release callback
-inline void ArrowArrayStreamRelease(struct ArrowArrayStream* stream) {
-  if (!ArrowArrayStreamIsReleased(stream)) {
-    stream->release(stream);
-    ARROW_C_ASSERT(ArrowArrayStreamIsReleased(stream),
-                   "ArrowArrayStreamRelease did not cleanup release callback");
+    assert(ArrowArrayIsReleased(array));
   }
 }
 

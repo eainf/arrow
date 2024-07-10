@@ -40,9 +40,6 @@ namespace internal {
 
 namespace {
 
-constexpr int kBZ2MinCompressionLevel = 1;
-constexpr int kBZ2MaxCompressionLevel = 9;
-
 // Max number of bytes the bz2 APIs accept at a time
 constexpr auto kSizeLimit =
     static_cast<int64_t>(std::numeric_limits<unsigned int>::max());
@@ -265,12 +262,7 @@ class BZ2Codec : public Codec {
     return ptr;
   }
 
-  Compression::type compression_type() const override { return Compression::BZ2; }
-
-  int compression_level() const override { return compression_level_; }
-  int minimum_compression_level() const override { return kBZ2MinCompressionLevel; }
-  int maximum_compression_level() const override { return kBZ2MaxCompressionLevel; }
-  int default_compression_level() const override { return kBZ2DefaultCompressionLevel; }
+  const char* name() const override { return "bz2"; }
 
  private:
   int compression_level_;
@@ -279,7 +271,7 @@ class BZ2Codec : public Codec {
 }  // namespace
 
 std::unique_ptr<Codec> MakeBZ2Codec(int compression_level) {
-  return std::make_unique<BZ2Codec>(compression_level);
+  return std::unique_ptr<Codec>(new BZ2Codec(compression_level));
 }
 
 }  // namespace internal

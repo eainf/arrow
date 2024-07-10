@@ -46,7 +46,6 @@ void for_loop(benchmark::State& state) {
   for (auto _ : state) {
     for (int64_t index = 0; index < kSize; ++index) target[index] = source[index] + 1;
   }
-  state.SetItemsProcessed(state.iterations() * kSize);
 }
 
 BENCHMARK(for_loop);
@@ -59,7 +58,6 @@ void std_copy(benchmark::State& state) {
   for (auto _ : state) {
     std::copy(source.begin(), source.end(), target.begin());
   }
-  state.SetItemsProcessed(state.iterations() * kSize);
 }
 
 BENCHMARK(std_copy);
@@ -73,7 +71,6 @@ void std_copy_converting(benchmark::State& state) {
   for (auto _ : state) {
     std::copy(source.begin(), source.end(), target.begin());
   }
-  state.SetItemsProcessed(state.iterations() * kSize);
 }
 
 BENCHMARK(std_copy_converting);
@@ -88,7 +85,6 @@ void lazy_copy(benchmark::State& state) {
   for (auto _ : state) {
     std::copy(lazy_range.begin(), lazy_range.end(), target.begin());
   }
-  state.SetItemsProcessed(state.iterations() * kSize);
 }
 
 BENCHMARK(lazy_copy);
@@ -105,7 +101,6 @@ void lazy_copy_converting(benchmark::State& state) {
   for (auto _ : state) {
     std::copy(lazy_range.begin(), lazy_range.end(), target.begin());
   }
-  state.SetItemsProcessed(state.iterations() * kSize);
 }
 
 BENCHMARK(lazy_copy_converting);
@@ -124,7 +119,6 @@ void lazy_postinc(benchmark::State& state) {
 
     while (lazy_iter != lazy_end) *(target_iter++) = *(lazy_iter++);
   }
-  state.SetItemsProcessed(state.iterations() * kSize);
 }
 
 BENCHMARK(lazy_postinc);

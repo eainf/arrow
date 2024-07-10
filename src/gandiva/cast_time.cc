@@ -29,7 +29,7 @@
 
 namespace gandiva {
 
-arrow::Status ExportedTimeFunctions::AddMappings(Engine* engine) const {
+void ExportedTimeFunctions::AddMappings(Engine* engine) const {
   std::vector<llvm::Type*> args;
   auto types = engine->types();
 
@@ -42,7 +42,6 @@ arrow::Status ExportedTimeFunctions::AddMappings(Engine* engine) const {
   engine->AddGlobalMappingForFunc("gdv_fn_time_with_zone",
                                   types->i32_type() /*return_type*/, args,
                                   reinterpret_cast<void*>(gdv_fn_time_with_zone));
-  return arrow::Status::OK();
 }
 
 }  // namespace gandiva

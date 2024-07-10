@@ -43,7 +43,6 @@ using arrow::int16;
 using arrow::int32;
 using arrow::int64;
 using arrow::int8;
-using arrow::month_interval;
 using arrow::uint16;
 using arrow::uint32;
 using arrow::uint64;
@@ -154,16 +153,6 @@ typedef std::unordered_map<const FunctionSignature*, const NativeFunction*, KeyH
                  DataTypeVector{TYPE(), TYPE()}, boolean(), kResultNullNever, \
                  ARROW_STRINGIFY(NAME##_##TYPE##_##TYPE))
 
-// Binary functions that :
-// - NULL handling is of type NULL_NEVER
-//
-// The pre-compiled fn name includes the base name & input type names,
-// eg. nvl_int32_int32
-#define BINARY_SAFE_NULL_NEVER(NAME, ALIASES, TYPE)                        \
-  NativeFunction(#NAME, std::vector<std::string> ALIASES,                  \
-                 DataTypeVector{TYPE(), TYPE()}, TYPE(), kResultNullNever, \
-                 ARROW_STRINGIFY(NAME##_##TYPE##_##TYPE))
-
 // Extract functions (used with data/time types) that :
 // - NULL handling is of type NULL_IF_NULL
 //
@@ -171,25 +160,6 @@ typedef std::unordered_map<const FunctionSignature*, const NativeFunction*, KeyH
 #define EXTRACT_SAFE_NULL_IF_NULL(NAME, ALIASES, TYPE)                            \
   NativeFunction(#NAME, std::vector<std::string> ALIASES, DataTypeVector{TYPE()}, \
                  int64(), kResultNullIfNull, ARROW_STRINGIFY(NAME##_##TYPE))
-
-#define TRUNCATE_SAFE_NULL_IF_NULL(NAME, ALIASES, TYPE)                           \
-  NativeFunction(#NAME, std::vector<std::string> ALIASES, DataTypeVector{TYPE()}, \
-                 TYPE(), kResultNullIfNull, ARROW_STRINGIFY(NAME##_##TYPE))
-
-// Last day functions (used with data/time types) that :
-// - NULL handling is of type NULL_IF_NULL
-//
-// The pre-compiled fn name includes the base name & input type name. eg:
-// - last_day_from_date64
-#define LAST_DAY_SAFE_NULL_IF_NULL(NAME, ALIASES, TYPE)                           \
-  NativeFunction(#NAME, std::vector<std::string> ALIASES, DataTypeVector{TYPE()}, \
-                 date64(), kResultNullIfNull, ARROW_STRINGIFY(NAME##_from_##TYPE))
-
-#define NEXT_DAY_SAFE_NULL_IF_NULL(NAME, ALIASES, TYPE)                       \
-  NativeFunction(#NAME, std::vector<std::string> ALIASES,                     \
-                 DataTypeVector{TYPE(), utf8()}, date64(), kResultNullIfNull, \
-                 ARROW_STRINGIFY(NAME##_from_##TYPE),                         \
-                 NativeFunction::kNeedsContext | NativeFunction::kCanReturnErrors)
 
 // Hash32 functions that :
 // - NULL handling is of type NULL_NEVER
@@ -225,57 +195,13 @@ typedef std::unordered_map<const FunctionSignature*, const NativeFunction*, KeyH
                  DataTypeVector{TYPE(), int64()}, int64(), kResultNullNever, \
                  ARROW_STRINGIFY(NAME##WithSeed_##TYPE))
 
-// HashSHA1 functions that :
-// - NULL handling is of type NULL_NEVER
-// - can return errors
-//
-// The function name includes the base name & input type name. gdv_fn_sha1_float64
-#define HASH_SHA1_NULL_NEVER(NAME, ALIASES, TYPE)                        \
-  NativeFunction(#NAME, {"sha", "sha1"}, DataTypeVector{TYPE()}, utf8(), \
-                 kResultNullNever, ARROW_STRINGIFY(gdv_fn_sha1_##TYPE),  \
-                 NativeFunction::kNeedsContext | NativeFunction::kCanReturnErrors)
-
-// HashSHA512 functions that :
-// - NULL handling is of type NULL_NEVER
-// - can return errors
-//
-// The function name includes the base name & input type name. gdv_fn_sha512_float64
-#define HASH_SHA512_NULL_NEVER(NAME, ALIASES, TYPE)                                   \
-  NativeFunction(#NAME, {"sha512"}, DataTypeVector{TYPE()}, utf8(), kResultNullNever, \
-                 ARROW_STRINGIFY(gdv_fn_sha512_##TYPE),                               \
-                 NativeFunction::kNeedsContext | NativeFunction::kCanReturnErrors)
-
-// HashSHA256 functions that :
-// - NULL handling is of type NULL_NEVER
-// - can return errors
-//
-// The function name includes the base name & input type name. gdv_fn_sha256_float64
-#define HASH_SHA256_NULL_NEVER(NAME, ALIASES, TYPE)                                   \
-  NativeFunction(#NAME, {"sha256"}, DataTypeVector{TYPE()}, utf8(), kResultNullNever, \
-                 ARROW_STRINGIFY(gdv_fn_sha256_##TYPE),                               \
-                 NativeFunction::kNeedsContext | NativeFunction::kCanReturnErrors)
-
-// HashMD5 functions that :
-// - NULL handling is of type NULL_NEVER
-// - can return errors
-//
-// The function name includes the base name & input type name. gdv_fn_md5_float64
-#define HASH_MD5_NULL_NEVER(NAME, ALIASES, TYPE)                                   \
-  NativeFunction(#NAME, {"md5"}, DataTypeVector{TYPE()}, utf8(), kResultNullNever, \
-                 ARROW_STRINGIFY(gdv_fn_md5_##TYPE),                               \
-                 NativeFunction::kNeedsContext | NativeFunction::kCanReturnErrors)
-
 // Iterate the inner macro over all numeric types
-#define BASE_NUMERIC_TYPES(INNER, NAME, ALIASES)                                        \
+#define NUMERIC_TYPES(INNER, NAME, ALIASES)                                             \
   INNER(NAME, ALIASES, int8), INNER(NAME, ALIASES, int16), INNER(NAME, ALIASES, int32), \
       INNER(NAME, ALIASES, int64), INNER(NAME, ALIASES, uint8),                         \
       INNER(NAME, ALIASES, uint16), INNER(NAME, ALIASES, uint32),                       \
       INNER(NAME, ALIASES, uint64), INNER(NAME, ALIASES, float32),                      \
-      INNER(NAME, ALIASES, float64)
-
-// Iterate the inner macro over all base numeric types
-#define NUMERIC_TYPES(INNER, NAME, ALIASES) \
-  BASE_NUMERIC_TYPES(INNER, NAME, ALIASES), INNER(NAME, ALIASES, decimal128)
+      INNER(NAME, ALIASES, float64), INNER(NAME, ALIASES, decimal128)
 
 // Iterate the inner macro over numeric and date/time types
 #define NUMERIC_DATE_TYPES(INNER, NAME, ALIASES)                         \

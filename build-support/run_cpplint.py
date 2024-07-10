@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -38,7 +38,6 @@ _filters = '''
 -readability/alt_tokens
 -build/header_guard
 -build/c++11
--build/include_what_you_use
 -runtime/references
 -build/include_order
 '''.split()
@@ -67,7 +66,6 @@ if __name__ == "__main__":
                         "that should be excluded from the checks")
     parser.add_argument("--source_dir",
                         required=True,
-                        action="append",
                         help="Root directory of the source code")
     parser.add_argument("--quiet", default=False,
                         action="store_true",
@@ -80,9 +78,8 @@ if __name__ == "__main__":
             exclude_globs.extend(line.strip() for line in f)
 
     linted_filenames = []
-    for source_dir in arguments.source_dir:
-        for path in lintutils.get_sources(source_dir, exclude_globs):
-            linted_filenames.append(str(path))
+    for path in lintutils.get_sources(arguments.source_dir, exclude_globs):
+        linted_filenames.append(str(path))
 
     cmd = [
         arguments.cpplint_binary,

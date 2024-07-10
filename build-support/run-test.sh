@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Copyright 2014 Cloudera, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,7 +39,7 @@ TEST_DIRNAME=$(cd $(dirname $1); pwd)
 TEST_FILENAME=$(basename $1)
 shift
 TEST_EXECUTABLE="$TEST_DIRNAME/$TEST_FILENAME"
-TEST_NAME=$(echo $TEST_FILENAME | sed -E -e 's/\..+$//') # Remove path and extension (if any).
+TEST_NAME=$(echo $TEST_FILENAME | perl -pe 's/\..+?$//') # Remove path and extension (if any).
 
 # We run each test in its own subdir to avoid core file related races.
 TEST_WORKDIR=$OUTPUT_ROOT/build/test-work/$TEST_NAME
@@ -65,10 +65,14 @@ function setup_sanitizers() {
 
   # Configure TSAN (ignored if this isn't a TSAN build).
   #
+  # Deadlock detection (new in clang 3.5) is disabled because:
+  # 1. The clang 3.5 deadlock detector crashes in some unit tests. It
+  #    needs compiler-rt commits c4c3dfd, 9a8efe3, and possibly others.
+  # 2. Many unit tests report lock-order-inversion warnings; they should be
+  #    fixed before reenabling the detector.
+  TSAN_OPTIONS="$TSAN_OPTIONS detect_deadlocks=0"
   TSAN_OPTIONS="$TSAN_OPTIONS suppressions=$ROOT/build-support/tsan-suppressions.txt"
   TSAN_OPTIONS="$TSAN_OPTIONS history_size=7"
-  # Some tests deliberately fail allocating memory
-  TSAN_OPTIONS="$TSAN_OPTIONS allocator_may_return_null=1"
   export TSAN_OPTIONS
 
   UBSAN_OPTIONS="$UBSAN_OPTIONS print_stacktrace=1"
@@ -92,13 +96,12 @@ function run_test() {
   # even when retries are successful.
   rm -f $XMLFILE
 
-  $TEST_EXECUTABLE "$@" > $LOGFILE.raw 2>&1
-  STATUS=$?
-  cat $LOGFILE.raw \
-    | ${PYTHON:-python} $ROOT/build-support/asan_symbolize.py \
+  $TEST_EXECUTABLE "$@" 2>&1 \
+    | $ROOT/build-support/asan_symbolize.py \
     | ${CXXFILT:-c++filt} \
+    | $ROOT/build-support/stacktrace_addr2line.pl $TEST_EXECUTABLE \
     | $pipe_cmd 2>&1 | tee $LOGFILE
-  rm -f $LOGFILE.raw
+  STATUS=$?
 
   # TSAN doesn't always exit with a non-zero exit code due to a bug:
   # mutex errors don't get reported through the normal error reporting infrastructure.
@@ -108,7 +111,8 @@ function run_test() {
   # XML output from gtest. We assume that gtest knows better than us and our
   # regexes in most cases, but for certain errors we delete the resulting xml
   # file and let our own post-processing step regenerate it.
-  if grep -E -q "ThreadSanitizer|Leak check.*detected leaks" $LOGFILE ; then
+  export GREP=$(which egrep)
+  if zgrep --silent "ThreadSanitizer|Leak check.*detected leaks" $LOGFILE ; then
     echo ThreadSanitizer or leak check failures in $LOGFILE
     STATUS=1
     rm -f $XMLFILE
@@ -155,16 +159,16 @@ function post_process_tests() {
   # If we have a LeakSanitizer report, and XML reporting is configured, add a new test
   # case result to the XML file for the leak report. Otherwise Jenkins won't show
   # us which tests had LSAN errors.
-  if grep -E -q "ERROR: LeakSanitizer: detected memory leaks" $LOGFILE ; then
-    echo Test had memory leaks. Editing XML
-    sed -i.bak -e '/<\/testsuite>/ i\
-  <testcase name="LeakSanitizer" status="run" classname="LSAN">\
-    <failure message="LeakSanitizer failed" type="">\
-      See txt log file for details\
-    </failure>\
-  </testcase>' \
-      $XMLFILE
-    mv $XMLFILE.bak $XMLFILE
+  if zgrep --silent "ERROR: LeakSanitizer: detected memory leaks" $LOGFILE ; then
+      echo Test had memory leaks. Editing XML
+      perl -p -i -e '
+      if (m#</testsuite>#) {
+        print "<testcase name=\"LeakSanitizer\" status=\"run\" classname=\"LSAN\">\n";
+        print "  <failure message=\"LeakSanitizer failed\" type=\"\">\n";
+        print "    See txt log file for details\n";
+        print "  </failure>\n";
+        print "</testcase>\n";
+      }' $XMLFILE
   fi
 }
 

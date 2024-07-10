@@ -28,7 +28,6 @@
 #include "arrow/memory_pool.h"
 #include "arrow/status.h"
 #include "arrow/util/future.h"
-#include "arrow/util/io_util.h"
 #include "arrow/util/logging.h"
 #include "arrow/util/macros.h"
 #include "arrow/util/memory.h"
@@ -261,25 +260,22 @@ void FixedSizeBufferWriter::set_memcopy_threshold(int64_t threshold) {
 // ----------------------------------------------------------------------
 // In-memory buffer reader
 
-BufferReader::BufferReader(std::shared_ptr<Buffer> buffer)
-    : buffer_(std::move(buffer)),
-      data_(buffer_ ? buffer_->data() : reinterpret_cast<const uint8_t*>("")),
-      size_(buffer_ ? buffer_->size() : 0),
+BufferReader::BufferReader(const std::shared_ptr<Buffer>& buffer)
+    : buffer_(buffer),
+      data_(buffer->data()),
+      size_(buffer->size()),
       position_(0),
       is_open_(true) {}
 
 BufferReader::BufferReader(const uint8_t* data, int64_t size)
-    : BufferReader(std::make_shared<Buffer>(data, size)) {}
+    : buffer_(nullptr), data_(data), size_(size), position_(0), is_open_(true) {}
 
 BufferReader::BufferReader(const Buffer& buffer)
-    : BufferReader(std::make_shared<Buffer>(buffer.data(), buffer.size())) {}
+    : BufferReader(buffer.data(), buffer.size()) {}
 
-BufferReader::BufferReader(std::string_view data)
-    : BufferReader(std::make_shared<Buffer>(data)) {}
-
-std::unique_ptr<BufferReader> BufferReader::FromString(std::string data) {
-  return std::make_unique<BufferReader>(Buffer::FromString(std::move(data)));
-}
+BufferReader::BufferReader(const util::string_view& data)
+    : BufferReader(reinterpret_cast<const uint8_t*>(data.data()),
+                   static_cast<int64_t>(data.size())) {}
 
 Status BufferReader::DoClose() {
   is_open_ = false;
@@ -293,38 +289,17 @@ Result<int64_t> BufferReader::DoTell() const {
   return position_;
 }
 
-Result<std::string_view> BufferReader::DoPeek(int64_t nbytes) {
+Result<util::string_view> BufferReader::DoPeek(int64_t nbytes) {
   RETURN_NOT_OK(CheckClosed());
 
   const int64_t bytes_available = std::min(nbytes, size_ - position_);
-  return std::string_view(reinterpret_cast<const char*>(data_) + position_,
-                          static_cast<size_t>(bytes_available));
+  return util::string_view(reinterpret_cast<const char*>(data_) + position_,
+                           static_cast<size_t>(bytes_available));
 }
 
 bool BufferReader::supports_zero_copy() const { return true; }
 
-Status BufferReader::WillNeed(const std::vector<ReadRange>& ranges) {
-  using ::arrow::internal::MemoryRegion;
-
-  RETURN_NOT_OK(CheckClosed());
-
-  std::vector<MemoryRegion> regions(ranges.size());
-  for (size_t i = 0; i < ranges.size(); ++i) {
-    const auto& range = ranges[i];
-    ARROW_ASSIGN_OR_RAISE(auto size,
-                          internal::ValidateReadRange(range.offset, range.length, size_));
-    regions[i] = {const_cast<uint8_t*>(data_ + range.offset), static_cast<size_t>(size)};
-  }
-  const auto st = ::arrow::internal::MemoryAdviseWillNeed(regions);
-  if (st.IsIOError()) {
-    // Ignore any system-level errors, in case the memory area isn't madvise()-able
-    return Status::OK();
-  }
-  return st;
-}
-
-Future<std::shared_ptr<Buffer>> BufferReader::ReadAsync(const IOContext&,
-                                                        int64_t position,
+Future<std::shared_ptr<Buffer>> BufferReader::ReadAsync(int64_t position,
                                                         int64_t nbytes) {
   return Future<std::shared_ptr<Buffer>>::MakeFinished(DoReadAt(position, nbytes));
 }
@@ -345,11 +320,6 @@ Result<std::shared_ptr<Buffer>> BufferReader::DoReadAt(int64_t position, int64_t
 
   ARROW_ASSIGN_OR_RAISE(nbytes, internal::ValidateReadRange(position, nbytes, size_));
   DCHECK_GE(nbytes, 0);
-
-  // Arrange for data to be paged in
-  // RETURN_NOT_OK(::arrow::internal::MemoryAdviseWillNeed(
-  //     {{const_cast<uint8_t*>(data_ + position), static_cast<size_t>(nbytes)}}));
-
   if (nbytes > 0 && buffer_ != nullptr) {
     return SliceBuffer(buffer_, position, nbytes);
   } else {

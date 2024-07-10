@@ -22,7 +22,7 @@
 # (this is an inherent limitation of Cython).
 #
 # The sample paths set with the CMake include_directories() command will be used
-# for include directories to search for *.pxd when running the Cython compiler.
+# for include directories to search for *.pxd when running the Cython complire.
 #
 # Cache variables that effect the behavior include:
 #
@@ -107,9 +107,8 @@ function(compile_pyx
   endif()
 
   if(NOT WIN32)
-    string( TOLOWER "${CMAKE_BUILD_TYPE}" build_type )
-    if("${build_type}" STREQUAL "debug"
-       OR "${build_type}" STREQUAL "relwithdebinfo")
+    if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug"
+       OR "${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
       set(cython_debug_arg "--gdb")
     endif()
   endif()
@@ -118,7 +117,7 @@ function(compile_pyx
   get_source_file_property(property_is_public ${pyx_file} CYTHON_PUBLIC)
   get_source_file_property(property_is_api ${pyx_file} CYTHON_API)
   if(${property_is_api})
-    set(_generated_files "${output_file}" "${_name}.h" "${_name}_api.h")
+    set(_generated_files "${output_file}" "${_name}.h" "${name}_api.h")
   elseif(${property_is_public})
     set(_generated_files "${output_file}" "${_name}.h")
   else()
@@ -145,8 +144,6 @@ function(compile_pyx
             ${no_docstrings_arg}
             ${cython_debug_arg}
             ${CYTHON_FLAGS}
-            # Necessary for autodoc of function arguments
-            --directive embedsignature=True
             # Necessary for Cython code coverage
             --working
             ${CMAKE_CURRENT_SOURCE_DIR}

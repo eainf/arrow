@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <cmath>
 #include <memory>
 #include <stack>
 #include <string>
@@ -39,7 +38,7 @@ class Annotator;
 class GANDIVA_EXPORT ExprDecomposer : public NodeVisitor {
  public:
   explicit ExprDecomposer(const FunctionRegistry& registry, Annotator& annotator)
-      : registry_(registry), annotator_(annotator), nested_if_else_(false) {}
+      : registry_(registry), annotator_(annotator) {}
 
   Status Decompose(const Node& root, ValueValidityPairPtr* out) {
     auto status = root.Accept(*this);
@@ -57,8 +56,6 @@ class GANDIVA_EXPORT ExprDecomposer : public NodeVisitor {
   FRIEND_TEST(TestExprDecomposer, TestInternalIf);
   FRIEND_TEST(TestExprDecomposer, TestParallelIf);
   FRIEND_TEST(TestExprDecomposer, TestIfInCondition);
-  FRIEND_TEST(TestExprDecomposer, TestFunctionBetweenNestedIf);
-  FRIEND_TEST(TestExprDecomposer, TestComplexIfCondition);
 
   Status Visit(const FieldNode& node) override;
   Status Visit(const FunctionNode& node) override;
@@ -67,13 +64,7 @@ class GANDIVA_EXPORT ExprDecomposer : public NodeVisitor {
   Status Visit(const BooleanNode& node) override;
   Status Visit(const InExpressionNode<int32_t>& node) override;
   Status Visit(const InExpressionNode<int64_t>& node) override;
-  Status Visit(const InExpressionNode<float>& node) override;
-  Status Visit(const InExpressionNode<double>& node) override;
-  Status Visit(const InExpressionNode<gandiva::DecimalScalar128>& node) override;
   Status Visit(const InExpressionNode<std::string>& node) override;
-
-  template <typename ctype>
-  Status VisitInGeneric(const InExpressionNode<ctype>& node);
 
   // Optimize a function node, if possible.
   const FunctionNode TryOptimize(const FunctionNode& node);
@@ -107,7 +98,7 @@ class GANDIVA_EXPORT ExprDecomposer : public NodeVisitor {
 
   // push 'then entry' to stack. returns either a new local bitmap or the parent's
   // bitmap (in case of nested if-else).
-  int PushThenEntry(const IfNode& node, bool reuse_bitmap);
+  int PushThenEntry(const IfNode& node);
 
   // pop 'then entry' from stack.
   void PopThenEntry(const IfNode& node);
@@ -125,7 +116,6 @@ class GANDIVA_EXPORT ExprDecomposer : public NodeVisitor {
   Annotator& annotator_;
   std::stack<std::unique_ptr<IfStackEntry>> if_entries_stack_;
   ValueValidityPairPtr result_;
-  bool nested_if_else_;
 };
 
 }  // namespace gandiva

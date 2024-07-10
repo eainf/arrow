@@ -34,7 +34,6 @@
 #include "arrow/util/logging.h"
 
 DEFINE_bool(clear, false, "delete all bucket contents");
-DEFINE_bool(create, false, "create test bucket");
 DEFINE_bool(test, false, "run narrative test against bucket");
 
 DEFINE_bool(verbose, false, "be more verbose (includes AWS warnings)");
@@ -44,11 +43,12 @@ DEFINE_string(access_key, "", "S3 access key");
 DEFINE_string(secret_key, "", "S3 secret key");
 
 DEFINE_string(bucket, "", "bucket name");
-DEFINE_string(region, "", "AWS region");
+DEFINE_string(region, arrow::fs::kS3DefaultRegion, "AWS region");
 DEFINE_string(endpoint, "", "Endpoint override (e.g. '127.0.0.1:9000')");
 DEFINE_string(scheme, "https", "Connection scheme");
 
-namespace arrow::fs {
+namespace arrow {
+namespace fs {
 
 #define ASSERT_RAISES_PRINT(context_msg, error_type, expr) \
   do {                                                     \
@@ -57,7 +57,8 @@ namespace arrow::fs {
     PrintError(context_msg, _status_or_result);            \
   } while (0)
 
-Result<std::shared_ptr<FileSystem>> MakeRootFileSystem() {
+std::shared_ptr<FileSystem> MakeFileSystem() {
+  std::shared_ptr<S3FileSystem> s3fs;
   S3Options options;
   if (!FLAGS_access_key.empty()) {
     options = S3Options::FromAccessKey(FLAGS_access_key, FLAGS_secret_key);
@@ -67,13 +68,8 @@ Result<std::shared_ptr<FileSystem>> MakeRootFileSystem() {
   options.endpoint_override = FLAGS_endpoint;
   options.scheme = FLAGS_scheme;
   options.region = FLAGS_region;
-  options.allow_bucket_creation = FLAGS_create;
-  return S3FileSystem::Make(options);
-}
-
-Result<std::shared_ptr<FileSystem>> MakeFileSystem() {
-  ARROW_ASSIGN_OR_RAISE(auto fs, MakeRootFileSystem());
-  return std::make_shared<SubTreeFileSystem>(FLAGS_bucket, fs);
+  s3fs = S3FileSystem::Make(options).ValueOrDie();
+  return std::make_shared<SubTreeFileSystem>(FLAGS_bucket, s3fs);
 }
 
 void PrintError(const std::string& context_msg, const Status& st) {
@@ -88,23 +84,14 @@ void PrintError(const std::string& context_msg, const Result<T>& result) {
   PrintError(context_msg, result.status());
 }
 
-void CheckDirectory(FileSystem* fs, const std::string& path) {
-  ASSERT_OK_AND_ASSIGN(auto info, fs->GetFileInfo(path));
-  AssertFileInfo(info, path, FileType::Directory);
-}
-
 void ClearBucket(int argc, char** argv) {
-  ASSERT_OK_AND_ASSIGN(auto fs, MakeFileSystem());
-  ASSERT_OK(fs->DeleteRootDirContents());
-}
+  auto fs = MakeFileSystem();
 
-void CreateBucket(int argc, char** argv) {
-  ASSERT_OK_AND_ASSIGN(auto fs, MakeRootFileSystem());
-  ASSERT_OK(fs->CreateDir(FLAGS_bucket));
+  ASSERT_OK(fs->DeleteDirContents(""));
 }
 
 void TestBucket(int argc, char** argv) {
-  ASSERT_OK_AND_ASSIGN(auto fs, MakeFileSystem());
+  auto fs = MakeFileSystem();
   std::vector<FileInfo> infos;
   FileSelector select;
   std::shared_ptr<io::InputStream> is;
@@ -126,22 +113,19 @@ void TestBucket(int argc, char** argv) {
   ASSERT_RAISES_PRINT("CreateDir in nonexistent parent", IOError,
                       fs->CreateDir("Dir2/Subdir", /*recursive=*/false));
   ASSERT_OK(fs->CreateDir("Dir2/Subdir", /*recursive=*/true));
-  ASSERT_OK(fs->CreateDir("Nested/1/2/3/4", /*recursive=*/true));
   CreateFile(fs.get(), "File1", "first data");
   CreateFile(fs.get(), "Dir1/File2", "second data");
   CreateFile(fs.get(), "Dir2/Subdir/File3", "third data");
-  CreateFile(fs.get(), "Nested/1/2/3/4/File4", "fourth data");
 
   // GetFileInfo(Selector)
   select.base_dir = "";
   ASSERT_OK_AND_ASSIGN(infos, fs->GetFileInfo(select));
-  ASSERT_EQ(infos.size(), 5);
+  ASSERT_EQ(infos.size(), 4);
   SortInfos(&infos);
   AssertFileInfo(infos[0], "Dir1", FileType::Directory);
   AssertFileInfo(infos[1], "Dir2", FileType::Directory);
   AssertFileInfo(infos[2], "EmptyDir", FileType::Directory);
   AssertFileInfo(infos[3], "File1", FileType::File, 10);
-  AssertFileInfo(infos[4], "Nested", FileType::Directory);
 
   select.base_dir = "zzzz";
   ASSERT_RAISES_PRINT("GetFileInfo(Selector) with nonexisting base_dir", IOError,
@@ -154,7 +138,6 @@ void TestBucket(int argc, char** argv) {
   select.allow_not_found = false;
   ASSERT_OK_AND_ASSIGN(infos, fs->GetFileInfo(select));
   ASSERT_EQ(infos.size(), 2);
-  SortInfos(&infos);
   AssertFileInfo(infos[0], "Dir1/File2", FileType::File, 11);
   AssertFileInfo(infos[1], "Dir1/Subdir", FileType::Directory);
 
@@ -162,19 +145,8 @@ void TestBucket(int argc, char** argv) {
   select.recursive = true;
   ASSERT_OK_AND_ASSIGN(infos, fs->GetFileInfo(select));
   ASSERT_EQ(infos.size(), 2);
-  SortInfos(&infos);
   AssertFileInfo(infos[0], "Dir2/Subdir", FileType::Directory);
   AssertFileInfo(infos[1], "Dir2/Subdir/File3", FileType::File, 10);
-
-  // GetFileInfo(single entry)
-  CheckDirectory(fs.get(), "EmptyDir");
-  CheckDirectory(fs.get(), "Dir1");
-  CheckDirectory(fs.get(), "Nested");
-  CheckDirectory(fs.get(), "Nested/1");
-  CheckDirectory(fs.get(), "Nested/1/2");
-  CheckDirectory(fs.get(), "Nested/1/2/3");
-  CheckDirectory(fs.get(), "Nested/1/2/3/4");
-  AssertFileInfo(fs.get(), "Nest", FileType::NotFound);
 
   // Read a file
   ASSERT_RAISES_PRINT("OpenInputStream with nonexistent file", IOError,
@@ -229,24 +201,17 @@ void TestMain(int argc, char** argv) {
                           : (FLAGS_verbose ? S3LogLevel::Warn : S3LogLevel::Fatal);
   ASSERT_OK(InitializeS3(options));
 
-  if (FLAGS_region.empty() && FLAGS_endpoint.empty()) {
-    ASSERT_OK_AND_ASSIGN(FLAGS_region, ResolveS3BucketRegion(FLAGS_bucket));
-  }
-
-  if (FLAGS_create) {
-    CreateBucket(argc, argv);
-  }
   if (FLAGS_clear) {
     ClearBucket(argc, argv);
-  }
-  if (FLAGS_test) {
+  } else if (FLAGS_test) {
     TestBucket(argc, argv);
   }
 
   ASSERT_OK(FinalizeS3());
 }
 
-}  // namespace arrow::fs
+}  // namespace fs
+}  // namespace arrow
 
 int main(int argc, char** argv) {
   std::stringstream ss;
@@ -255,8 +220,8 @@ int main(int argc, char** argv) {
   gflags::SetUsageMessage(ss.str());
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  if (FLAGS_clear + FLAGS_test + FLAGS_create != 1) {
-    ARROW_LOG(ERROR) << "Need exactly one of --test, --clear and --create";
+  if (FLAGS_clear + FLAGS_test != 1) {
+    ARROW_LOG(ERROR) << "Need exactly one of --test and --clear";
     return 2;
   }
   if (FLAGS_bucket.empty()) {

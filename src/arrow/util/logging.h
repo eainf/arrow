@@ -58,26 +58,26 @@ enum class ArrowLogLevel : int {
 
 #define ARROW_IGNORE_EXPR(expr) ((void)(expr))
 
-#define ARROW_CHECK_OR_LOG(condition, level) \
-  ARROW_PREDICT_TRUE(condition)              \
-  ? ARROW_IGNORE_EXPR(0)                     \
-  : ::arrow::util::Voidify() & ARROW_LOG(level) << " Check failed: " #condition " "
-
-#define ARROW_CHECK(condition) ARROW_CHECK_OR_LOG(condition, FATAL)
+#define ARROW_CHECK(condition)                                               \
+  ARROW_PREDICT_TRUE(condition)                                              \
+  ? ARROW_IGNORE_EXPR(0)                                                     \
+  : ::arrow::util::Voidify() &                                               \
+          ::arrow::util::ArrowLog(__FILE__, __LINE__,                        \
+                                  ::arrow::util::ArrowLogLevel::ARROW_FATAL) \
+              << " Check failed: " #condition " "
 
 // If 'to_call' returns a bad status, CHECK immediately with a logged message
 // of 'msg' followed by the status.
-#define ARROW_CHECK_OK_PREPEND(to_call, msg, level)                 \
-  do {                                                              \
-    ::arrow::Status _s = (to_call);                                 \
-    ARROW_CHECK_OR_LOG(_s.ok(), level)                              \
-        << "Operation failed: " << ARROW_STRINGIFY(to_call) << "\n" \
-        << (msg) << ": " << _s.ToString();                          \
+#define ARROW_CHECK_OK_PREPEND(to_call, msg)                                         \
+  do {                                                                               \
+    ::arrow::Status _s = (to_call);                                                  \
+    ARROW_CHECK(_s.ok()) << "Operation failed: " << ARROW_STRINGIFY(to_call) << "\n" \
+                         << (msg) << ": " << _s.ToString();                          \
   } while (false)
 
 // If the status is bad, CHECK immediately, appending the status to the
 // logged message.
-#define ARROW_CHECK_OK(s) ARROW_CHECK_OK_PREPEND(s, "Bad status", FATAL)
+#define ARROW_CHECK_OK(s) ARROW_CHECK_OK_PREPEND(s, "Bad status")
 
 #define ARROW_CHECK_EQ(val1, val2) ARROW_CHECK((val1) == (val2))
 #define ARROW_CHECK_NE(val1, val2) ARROW_CHECK((val1) != (val2))
@@ -92,33 +92,33 @@ enum class ArrowLogLevel : int {
 // CAUTION: DCHECK_OK() always evaluates its argument, but other DCHECK*() macros
 // only do so in debug mode.
 
-#define ARROW_DCHECK(condition)               \
+#define DCHECK(condition)                     \
   while (false) ARROW_IGNORE_EXPR(condition); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_OK(s) \
-  ARROW_IGNORE_EXPR(s);    \
+#define DCHECK_OK(s)    \
+  ARROW_IGNORE_EXPR(s); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_EQ(val1, val2)      \
+#define DCHECK_EQ(val1, val2)            \
   while (false) ARROW_IGNORE_EXPR(val1); \
   while (false) ARROW_IGNORE_EXPR(val2); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_NE(val1, val2)      \
+#define DCHECK_NE(val1, val2)            \
   while (false) ARROW_IGNORE_EXPR(val1); \
   while (false) ARROW_IGNORE_EXPR(val2); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_LE(val1, val2)      \
+#define DCHECK_LE(val1, val2)            \
   while (false) ARROW_IGNORE_EXPR(val1); \
   while (false) ARROW_IGNORE_EXPR(val2); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_LT(val1, val2)      \
+#define DCHECK_LT(val1, val2)            \
   while (false) ARROW_IGNORE_EXPR(val1); \
   while (false) ARROW_IGNORE_EXPR(val2); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_GE(val1, val2)      \
+#define DCHECK_GE(val1, val2)            \
   while (false) ARROW_IGNORE_EXPR(val1); \
   while (false) ARROW_IGNORE_EXPR(val2); \
   while (false) ::arrow::util::detail::NullLog()
-#define ARROW_DCHECK_GT(val1, val2)      \
+#define DCHECK_GT(val1, val2)            \
   while (false) ARROW_IGNORE_EXPR(val1); \
   while (false) ARROW_IGNORE_EXPR(val2); \
   while (false) ::arrow::util::detail::NullLog()
@@ -126,25 +126,16 @@ enum class ArrowLogLevel : int {
 #else
 #define ARROW_DFATAL ::arrow::util::ArrowLogLevel::ARROW_FATAL
 
-#define ARROW_DCHECK ARROW_CHECK
-#define ARROW_DCHECK_OK ARROW_CHECK_OK
-#define ARROW_DCHECK_EQ ARROW_CHECK_EQ
-#define ARROW_DCHECK_NE ARROW_CHECK_NE
-#define ARROW_DCHECK_LE ARROW_CHECK_LE
-#define ARROW_DCHECK_LT ARROW_CHECK_LT
-#define ARROW_DCHECK_GE ARROW_CHECK_GE
-#define ARROW_DCHECK_GT ARROW_CHECK_GT
+#define DCHECK ARROW_CHECK
+#define DCHECK_OK ARROW_CHECK_OK
+#define DCHECK_EQ ARROW_CHECK_EQ
+#define DCHECK_NE ARROW_CHECK_NE
+#define DCHECK_LE ARROW_CHECK_LE
+#define DCHECK_LT ARROW_CHECK_LT
+#define DCHECK_GE ARROW_CHECK_GE
+#define DCHECK_GT ARROW_CHECK_GT
 
 #endif  // NDEBUG
-
-#define DCHECK ARROW_DCHECK
-#define DCHECK_OK ARROW_DCHECK_OK
-#define DCHECK_EQ ARROW_DCHECK_EQ
-#define DCHECK_NE ARROW_DCHECK_NE
-#define DCHECK_LE ARROW_DCHECK_LE
-#define DCHECK_LT ARROW_DCHECK_LT
-#define DCHECK_GE ARROW_DCHECK_GE
-#define DCHECK_GT ARROW_DCHECK_GT
 
 // This code is adapted from
 // https://github.com/ray-project/ray/blob/master/src/ray/util/logging.h.
